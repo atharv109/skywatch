@@ -48,7 +48,7 @@ Copy `.env.example` to `.env` (root, gitignored). Secrets never land in git and 
 
 | Var | What it's for | Owner | Where it's set | Without it |
 | --- | --- | --- | --- | --- |
-| `MONGODB_URI` | The only DB (hazards/resources/roads/users/conversations/outbox/verify_requests) | backend | Render env (Atlas) | DB-backed routes return 503; boot itself still runs (lazy connect) |
+| `MONGODB_URI` | The only DB (hazards/resources/roads/users/conversations/outbox/verify_requests + mesh: mesh_packets/beacons/mesh_devices) | backend | Render env (Atlas) | DB-backed routes return 503; boot itself still runs (lazy connect) |
 | `GEMINI_API_KEY` | Live LLM rendering of alerts | backend | Render env (Google AI Studio) | Fallback per-language pre-translated templates render the alert instead (also happens whenever `REPLAY=1` — the demo path uses templates, no Gemini call) |
 | `AIRNOW_API_KEY` | Live AQ obs by lat/long | backend | Render env (AirNow) | Ingest falls back to Open-Meteo air-quality host (no key); AQI fixture on the demo path |
 | `WSDOT_ACCESS_CODE` | Live WSDOT camera metadata / snapshots | backend | Render env (WSDOT) | Cameras only come from the committed fixture; roads/check verdicts still accepted |
@@ -65,6 +65,14 @@ Copy `.env.example` to `.env` (root, gitignored). Secrets never land in git and 
 | `PORT` | HTTP listener port (Render injects its own) | backend | Render env | defaults 3000 |
 | `TOOL_SECRET` | Shared secret for `/tools/*`, `/verify/run`, `/roads/check` (`X-Skywatch-Tool-Secret:` or `Authorization: Bearer`) | backend | Render env; the same value goes to the ElevenLabs agent tool configs | unset = endpoints accept **unauthenticated writes** (demo-grade decision; a boot-log warning fires). Set before exposing. |
 | `TIGER_DATABASE_URL` | Optional mirror of check-ins into Tiger Data `status_events` (Timescale Postgres, `pg`) | backend | Render env | unset = **no Tiger writes at all** (Mongo `verifiedAt` is the demo source of truth); set = fire-and-forget mirror, failures logged, never blocking the pipeline |
+
+## Offline mode (mesh, Task 8)
+
+Phones-only transport: dark phones relay over a Wi-Fi hotspot LAN (WebRTC — frontend page); the self-discovered **gateway** node POSTs the whole batch and rebroadcasts the returned downlink bundle.
+
+- `POST /mesh/sync` — `{deviceId, lat, lon, packets[]}` (max 200/packet batch). Each packet: `{id, type: beacon|hazard|ack|brief, status, lat, lon, ts, hops, ttl: 7, photo?, deviceId, sig, pubkey?, legacy?}`. Auth is the packets themselves: Ed25519 over `` `${id}|${type}|${ts}|${lat}|${lon}|${deviceId}` `` (each field passed through `String()`, sig + pubkey as base64 of the **raw** WebCrypto bytes); the pubkey is pinned on a device's first packet (`mesh_devices`, trust-on-first-use, demo-grade). Devices without Ed25519 send `legacy:true` — stored unverified, scored with an "unsigned device" reason, but never clustered and never acked. Packs with failed sigs are recorded unscored ("never dropped silently"). Dedup by packet id (idempotent gateway retries). Scoring is computed ONCE at sync with a reasons array; the 30-min decay composes at read time. Rescue beacons (`Trapped|Injured|Need Rescue`, any casing/emoji) are never decayed/downgraded and cluster per kind within 100 m.
+- The sync response is the **downlink bundle**: template-only brief text (never Gemini), verified-or-null shelter, blocked roads (max 2), and `acks` ("responders have seen your beacon", + 911 line) for the gateway's contributed beacon clusters. No free text anywhere.
+- `GET /mesh/state` — dark-zone dashboard layer (open-read, same posture as `/map/state`: never a phone number or raw deviceId; coverage dots are a sha256 deviceId hash prefix + ~1 km rounded point). It is also merged into `/map/state` as a `mesh` section only when packets exist — data-gated, never config-gated: **both mesh routes run identically in `REPLAY=0` and `REPLAY=1`** (explicit final-review decision).
 
 ## Run
 
