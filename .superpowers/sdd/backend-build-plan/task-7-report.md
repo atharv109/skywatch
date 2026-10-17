@@ -140,3 +140,43 @@ $ smoke -> 5/5 PASS
 - **Re-verification after fix:** gated suite 159/159 (16 files, MONGODB_URI to local mongod, throwaway db `skywatch-task7-run`, dropped after); smoke 5/5 PASS on the NODE_ENV=production boot; typecheck/build unchanged and clean.
 - **Ledgered (not mine):** minor 3 (smoke step-5 record behavior), minor 4 (tiger per-checkin pg connection lifetime), minor 5 (untracked apps/api/.env.example still left alone).
 - **Correction to the timeline above:** the first fresh `npm ci --include=dev` ran against a not-yet-updated lockfile (npm accepted it); the lockfile was then regenerated with `npm install --package-lock-only` after the commit and the commit amended to include it (`npm ci --dry-run` now reports manifests in sync). The boot proof above used the freshly installed tree from that first ci — the tree content is identical to what the regenerated lock installs (same tsx, no version change).
+
+---
+
+## Fix round 2 (final-review wave, separate commit 0f3bbdc, not pushed)
+
+I1 (demo beat 6, voice.ts only — no store.ts/send.ts edits) + T3 minor (signup.ts, bare ISO codes); scope guard respected.
+
+- **Post-call summary (processVoiceOutcome user path):** after the conversation
+  note, `sendPostCallSummary` composes a DETERMINISTIC text (no Gemini, no
+  network) from the conversation's `lastBrief` only and sends it through the
+  existing deliver path (`toPhoton` + outbox row + conversation entry via
+  `sendOutbound`). Composition: hazard title + top action + ("verified" shelter
+  only when confidence >= 0.5 AND status open, else "check official source for
+  shelter status") + map link `${PUBLIC_BASE_URL}/b/${userId}` (only when
+  PUBLIC_BASE_URL is genuinely set in env — config.publicBaseUrl always
+  defaults to localhost, which cannot be distinguished from unset) + the brief
+  emergency (911) line. Rate-limit exempt BY CONSTRUCTION: kind "alert" with
+  reserved rateKey `post-call-summary` that no deliverAlert caller uses for the
+  1/user/hazard/2h gate — exemption rationale + provenance marker commented in
+  voice.ts (OutboxMeta deliberately unused: no rendering happened). Sends are
+  consent-fenced (consentText required); STOPped (record deleted) and revoked
+  users get nothing; no lastBrief -> no summary (note still stands); summary
+  failure never affects outcome routing (sendOutbound records not_wired/failed
+  instead of throwing).
+- **Tests (voice.test.ts, +3):** brief outcome -> note AND summary outbox row
+  (status not_wired = attempted send with Photon unset) containing title/action/
+  map link/emergency, no phone anywhere in outbox; STOPped + revoked-consent
+  users -> nothing; pure postCallSummary coverage (confident vs unsure shelter,
+  link presence, trailing-slash URL normalization).
+- **Bare ISO codes (signup.ts):** `matchLanguage` now answers
+  en|es|zh|tl|vi|ar as standalone tokens (trimmed) BEFORE the phrase regexes —
+  the ask-language step AND the English-confirm loop both complete on a bare
+  "es" (previously it fell into confirm-pending purgatory and looped). Phrases/
+  hyphens/non-codes unchanged ("est" is still null).
+- **Tests (deliver.test.ts, +3):** bare "es" completes signup directly and the
+  state stays active afterwards; "es" escapes the confirm loop after an
+  ambiguous reply; matchLanguage table for all six codes + regression cases.
+- **Verification:** typecheck clean; hermetic 160 pass / 5 skip (165 total);
+  gated suite with MONGODB_URI on local mongod (throwaway db
+  `skywatch-fixwave`, dropped after): 165/165, 16 files.

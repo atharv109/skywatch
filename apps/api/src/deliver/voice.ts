@@ -21,8 +21,10 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Config } from "../config.ts";
-import type { DeliverStore } from "./store.ts";
+import type { UserBrief } from "../types/brief.ts";
+import type { DeliverStore, UserRecord } from "./store.ts";
 import type { VerifyStore } from "../verify/store.ts";
+import { sendOutbound, type SendContext } from "./send.ts";
 
 export type VoiceVerifyResult = "ok" | "bad-signature" | "missing-header" | "stale-timestamp" | "no-secret";
 
@@ -83,6 +85,67 @@ export function outcomeFor(payload: VoicePostCallPayload): string | null {
 }
 
 /**
+ * The user-routed post-call summary (demo beat 6): right after the conversation
+ * note, a deterministic summary text is composed ONLY from the user's lastBrief
+ * fields and sent through the existing deliver path (toPhoton + outbox row).
+ * No Gemini call, no network. Provenance marker: kind "alert" with the reserved
+ * rateKey below (OutboxMeta is unused — no rendering happened); identifiable in
+ * the outbox by that rateKey.
+ *
+ * RATE-LIMIT EXEMPTION (Global Constraint 3, documented): the 1/user/hazard/2h
+ * gate never consults this rateKey (deliverAlert callers use hazard sourceIds),
+ * and the summary is deliberately ungated here — it is part of the same alert
+ * interaction the user just had on the phone, not a new hazard push.
+ */
+export const POST_CALL_SUMMARY_RATE_KEY = "post-call-summary";
+
+/** Map link: PUBLIC_BASE_URL/b/<userId> when PUBLIC_BASE_URL is set; unset = no link (config defaulting makes config.publicBaseUrl undistinguishable from unset). */
+function mapLink(publicBaseUrlSet: boolean, publicBaseUrl: string, userId: string): string | null {
+  if (!publicBaseUrlSet) return null;
+  return `${publicBaseUrl.replace(/\/+$/, "")}/b/${userId}`;
+}
+
+/** Deterministic post-call summary: hazard title + top action + verified shelter (confidence >= 0.5) else "check official source" + optional map link + the 911 line. */
+export function postCallSummary(
+  brief: UserBrief,
+  userId: string,
+  publicBaseUrlSet: boolean,
+  publicBaseUrl: string,
+): string {
+  const title = brief.hazards[0]?.title ?? null;
+  const topAction = brief.actions[0]?.text ?? null;
+  const shelter =
+    brief.shelter && brief.shelter.confidence >= 0.5 && brief.shelter.status === "open"
+      ? `${brief.shelter.name} is verified open`
+      : "check official source for shelter status";
+  const parts = [
+    title ? `Skywatch follow-up: ${title}` : "Skywatch follow-up",
+    topAction,
+    shelter,
+    mapLink(publicBaseUrlSet, publicBaseUrl, userId),
+  ].filter((part): part is string => part !== null);
+  return `${parts.join(" ")}\n${brief.emergency}`;
+}
+
+/**
+ * Deterministic summary send (no Gemini): consent-checked, skipped when the
+ * conversation carries no lastBrief. Never throws — sendOutbound records
+ * (not_wired/failed) instead, the routing result is unaffected.
+ */
+async function sendPostCallSummary(
+  deps: { config: Config; deliver: DeliverStore; now: number },
+  user: UserRecord,
+): Promise<void> {
+  if (!user.consentText) return; // STOP/revoked: nothing sent (Global Constraint 3)
+  const brief = await deps.deliver.lastBrief(user.id);
+  if (!brief) return; // no alert interaction to summarize; the conversation note still stands
+  const set = Boolean(process.env["PUBLIC_BASE_URL"]);
+  const text = postCallSummary(brief, user.id, set, deps.config.publicBaseUrl);
+  const ctx: SendContext = { config: deps.config, store: async () => deps.deliver, now: () => deps.now };
+  await sendOutbound(ctx, user, text, "alert", POST_CALL_SUMMARY_RATE_KEY);
+}
+
+/**
  * The queue's processing target. Two routable events:
  * - post_call_transcription: outcome + transcript routed to its conversation
  *   (user_id → user) or its verify request (agent_id → dispatch).
@@ -111,6 +174,9 @@ export async function processVoiceOutcome(
         : "Voice check-in call";
       const note = `${label} (${outcome})`.slice(0, 500);
       await deps.deliver.appendConversation({ userId: user.id, from: "bot", text: note, at: deps.now });
+      // Demo beat 6: a post-call summary text accompanies the note (rate-limit
+      // exempt, part of the same alert interaction — see sendPostCallSummary).
+      await sendPostCallSummary(deps, user);
       return { matched: "user" };
     }
   }

@@ -494,3 +494,48 @@ describe("rate limit gate (1 alert / user / hazard / 2h, deliver-time outbox loo
     expect(await deliverAlert(ctx, textFalse, "hazard-c", "now goes out")).toBe("not_wired");
   });
 });
+// ---------------------------------------------------------------------------
+// Fix round 2 (Task 7 final-review wave): bare ISO codes are language answers.
+
+it("bare ISO code answer ('es') selects the language directly in the ask-language step", async () => {
+  const phone = "+15551231050";
+  const { dstore, post } = makeHarness();
+  await post(payloadFor("hi", phone, "es-lang-hi"));
+  await post(payloadFor("98104", phone, "es-lang-zip"));
+  await post(payloadFor("es", phone, "es-lang"));
+  let user = await dstore.getUserByPhone(phone);
+  expect(user?.state).toBe("active");
+  expect(user?.lang).toBe("es");
+  expect(user?.langConfirmPending).toBe(false);
+  const outbox = (await dstore.listOutbox()).filter((r) => r.userId === user?.id);
+  expect(outbox.at(-1)?.text).toMatch(/Español/);
+  // a follow-up message stays in the active state (no loop)
+  await post(payloadFor("que pasa", phone, "es-lang-after"));
+  expect((await dstore.getUserByPhone(phone))?.state).toBe("active");
+  expect((await dstore.getUserByPhone(phone))?.lang).toBe("es");
+});
+
+it("bare ISO code also escapes the English-confirm loop ('es' after an ambiguous reply completes signup)", async () => {
+  const phone = "+15551231051";
+  const { dstore, post } = makeHarness();
+  await post(payloadFor("hi", phone, "cf-hi"));
+  await post(payloadFor("98104", phone, "cf-zip"));
+  await post(payloadFor("je voudrais les alerts", phone, "cf-amb"));
+  expect(await dstore.getUserByPhone(phone)).toMatchObject({ state: "asked-lang", lang: "en", langConfirmPending: true });
+  await post(payloadFor("es", phone, "cf-es"));
+  const user = await dstore.getUserByPhone(phone);
+  expect(user?.state).toBe("active");
+  expect(user?.lang).toBe("es");
+  expect(user?.langConfirmPending).toBe(false);
+});
+
+it("matchLanguage: every bare ISO code (en|es|zh|tl|vi|ar) maps to itself; phrases and non-codes unchanged", async () => {
+  const { matchLanguage } = await import("../src/deliver/signup.ts");
+  for (const code of ["en", "es", "zh", "tl", "vi", "ar"]) {
+    expect(matchLanguage(code)).toBe(code);
+    expect(matchLanguage(` ${code} `)).toBe(code);
+  }
+  expect(matchLanguage("espanol por favor")).toBe("es");
+  expect(matchLanguage("hello there")).toBeNull();
+  expect(matchLanguage("est")).toBeNull();
+});

@@ -171,3 +171,163 @@ describe("POST /webhooks/voice/post-call", () => {
     expect(outcomeFor({ type: "post_call_transcription", data: {} })).toBeNull();
   });
 });
+// ---------------------------------------------------------------------------
+// Fix round 2 (Task 7 final-review wave): the post-call summary text (demo
+// beat 6) — deterministic, lastBrief-composed, rate-limit exempt, consent-fenced.
+import { POST_CALL_SUMMARY_RATE_KEY, postCallSummary, type VoicePostCallPayload } from "../src/deliver/voice.ts";
+import type { UserBrief } from "../src/types/brief.ts";
+
+const SUMMARY_BRIEF: UserBrief = {
+  userId: "mem-1",
+  lang: "es",
+  actions: [{ id: "keep-windows-closed", text: "Close windows and stay indoors." }],
+  hazards: [{ type: "smoke", severity: 3, title: "Smoke plume near Snoqualmie", timing: "now", validFrom: 0, validTo: 9 }],
+  shelter: {
+    id: "seed-shelter-1",
+    name: "Centro de la Raza",
+    distanceKm: 2.1,
+    status: "open",
+    confidence: 0.8,
+    hours: "24h",
+    verifiedMinutesAgo: 3,
+  },
+  blockedRoads: [],
+  officialSource: { name: "NWS Seattle", url: "https://weather.gov" },
+  emergency: "Call 911 if you are in danger.",
+};
+
+describe("post-call summary (demo beat 6)", () => {
+  it("postCallSummary: composed only from brief fields; shelter when confident, else official-source nudge; link only when PUBLIC_BASE_URL set", () => {
+    const withLink = postCallSummary(SUMMARY_BRIEF, "mem-1", true, "https://skywatch.onrender.com");
+    expect(withLink).toContain("Smoke plume near Snoqualmie");
+    expect(withLink).toContain("Close windows and stay indoors.");
+    expect(withLink).toContain("Centro de la Raza is verified open");
+    expect(withLink).toContain("https://skywatch.onrender.com/b/mem-1");
+    expect(withLink).toContain("Call 911 if you are in danger.");
+
+    const noLink = postCallSummary(SUMMARY_BRIEF, "mem-1", false, "http://localhost:3000");
+    expect(noLink).not.toContain("/b/");
+    expect(postCallSummary(SUMMARY_BRIEF, "mem-1", true, "https://skywatch.onrender.com/")).toContain(
+      "https://skywatch.onrender.com/b/mem-1",
+    );
+
+    const unsure = postCallSummary(
+      { ...SUMMARY_BRIEF, shelter: { ...SUMMARY_BRIEF.shelter!, confidence: 0.4, status: "unknown" } },
+      "mem-1",
+      false,
+      "http://localhost:3000",
+    );
+    expect(unsure).toContain("check official source for shelter status");
+    expect(unsure).not.toContain("Centro de la Raza is verified open");
+  });
+
+  it("brief-call outcome: conversation note AND summary send (outbox row, not_wired attempt, map link); no phone leak", async () => {
+    const prev = process.env["PUBLIC_BASE_URL"];
+    process.env["PUBLIC_BASE_URL"] = "https://skywatch.onrender.com";
+    try {
+      const h = harness({ configEnv: { PUBLIC_BASE_URL: "https://skywatch.onrender.com" } });
+      const user = await h.dstore.createUser({
+        phone: "+15551230001",
+        platform: "imessage",
+        spaceId: "any;-;+15551230001",
+        lang: "es",
+        state: "active",
+        loc: null,
+        zip: null,
+        consentText: true,
+        consentVoice: true,
+        addressAttempts: 0,
+        askedZip: false,
+        langConfirmPending: false,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      // The user's delivered alert (meta.brief) is what the summary summarizes.
+      await h.dstore.appendOutbox({
+        userId: user.id,
+        kind: "alert",
+        rateKey: "hms-smoke:demo",
+        spaceId: user.spaceId,
+        platform: user.platform,
+        text: "alert text placeholder",
+        status: "sent",
+        error: null,
+        meta: { lang: "es", source: "fallback", brief: { ...SUMMARY_BRIEF, userId: user.id } },
+        createdAt: 1,
+        sentAt: 1,
+      });
+
+      const payload: VoicePostCallPayload = structuredClone(OUTCOME_PAYLOAD);
+      payload.data!.user_id = user.id;
+      expect((await postCall(h.app, payload)).status).toBe(200);
+      await h.voice.drain();
+
+      // existing behavior: the outcome note is on the conversation
+      const convos = (await h.dstore.listConversations()).filter((e) => e.userId === user.id);
+      expect(convos.some((e) => e.text.startsWith("Voice check-in call"))).toBe(true);
+      // new: the summary was composed + sent through the deliver path
+      const summaryRows = (await h.dstore.listOutbox()).filter((r) => r.rateKey === POST_CALL_SUMMARY_RATE_KEY);
+      expect(summaryRows).toHaveLength(1);
+      expect(summaryRows[0]).toMatchObject({ userId: user.id, kind: "alert", status: "not_wired" });
+      const summaryText = summaryRows[0]!.text;
+      expect(summaryText).toContain("Smoke plume near Snoqualmie");
+      expect(summaryText).toContain(`https://skywatch.onrender.com/b/${user.id}`);
+      expect(summaryText).toContain("Call 911 if you are in danger.");
+      // privacy: never the phone number
+      expect(summaryText).not.toContain(user.phone);
+      expect((await h.dstore.listOutbox()).every((r) => !r.text.includes(user.phone))).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env["PUBLIC_BASE_URL"];
+      else process.env["PUBLIC_BASE_URL"] = prev;
+    }
+  });
+
+  it("STOPped user or revoked consent: no conversation note, no summary row", async () => {
+    const h = harness();
+    const stopped = await h.dstore.createUser({
+      phone: "+15551230002",
+      platform: "sms",
+      spaceId: "any;-;+15551230002",
+      lang: "en",
+      state: "active",
+      loc: null,
+      zip: null,
+      consentText: true,
+      consentVoice: true,
+      addressAttempts: 0,
+      askedZip: false,
+      langConfirmPending: false,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    await h.dstore.deleteUserByPhone(stopped.phone); // STOP removes the record
+    const revoked = await h.dstore.createUser({
+      phone: "+15551230003",
+      platform: "sms",
+      spaceId: "any;-;+15551230003",
+      lang: "en",
+      state: "active",
+      loc: null,
+      zip: null,
+      consentText: false,
+      consentVoice: false,
+      addressAttempts: 0,
+      askedZip: false,
+      langConfirmPending: false,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    for (const target of [stopped, revoked]) {
+      const payload: VoicePostCallPayload = structuredClone(OUTCOME_PAYLOAD);
+      payload.data!.user_id = target.id;
+      expect((await postCall(h.app, payload)).status).toBe(200);
+      await h.voice.drain();
+    }
+    const convos = await h.dstore.listConversations();
+    expect(convos.filter((e) => e.userId === stopped.id)).toHaveLength(0);
+    expect(convos.filter((e) => e.userId === revoked.id)).toHaveLength(0);
+    const summaries = (await h.dstore.listOutbox()).filter((r) => r.rateKey === POST_CALL_SUMMARY_RATE_KEY);
+    expect(summaries).toHaveLength(0);
+  });
+});

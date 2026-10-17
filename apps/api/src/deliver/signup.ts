@@ -63,11 +63,21 @@ const LANGUAGE_MATCHERS: Array<[Lang, RegExp[]]> = [
 
 export function matchLanguage(text: string): Lang | null {
   const t = text.toLowerCase();
+  // Bare ISO code first (trimmed/standalone only — must not swallow phrases).
+  if (BARE_ISO_CODES.has(t.trim())) return t.trim() as Lang;
   for (const [lang, patterns] of LANGUAGE_MATCHERS) {
     if (patterns.some((p) => p.test(t))) return lang;
   }
   return null;
 }
+
+/**
+ * Bare ISO codes ("es", "en", "zh", "tl", "vi", "ar") are valid language
+ * selection/confirm replies alongside the phrase matchers below — a
+ * Spanish-speaking user who answers the ask-language or the English-confirm
+ * step with a bare "es" must complete signup, not loop.
+ */
+const BARE_ISO_CODES: ReadonlySet<string> = new Set<Lang>(["en", "es", "zh", "tl", "vi", "ar"]);
 
 const BARE_ZIP = /^(\d{5})(?:\s*-\s*\d{4})?$/;
 /** A standalone 5-digit group inside longer text ("98104 seattle" hybrid). */
