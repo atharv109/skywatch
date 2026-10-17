@@ -62,13 +62,15 @@ export function mongoMatchStore(db: Db): MatchStore {
         .geoNear({
           near: pointGeometry(point),
           distanceField: "distanceM",
-          limit: 1,
+          // $geoNear's own `limit` is rejected on newer servers (Atlas included):
+          // cap with a $limit stage after instead.
           query: {
             kind: "shelter",
             status: "open",
             verifiedAt: { $gte: now - halfLifeMinutes.shelter * 60_000 },
           },
         })
+        .limit(1)
         .toArray();
       const hit = doc[0];
       return hit ? { ...hit, distanceKm: hit.distanceM / 1000 } : null;

@@ -356,6 +356,136 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: checkin write + verify_re
       await closeDb();
     }
   });
+
+  it("full API round-trip against real Mongo: check-in + roads/check (no immutable-_id 503) + verify run → checkout → failure release", async () => {
+    const { getDb, closeDb, COLLECTIONS } = await import("../src/db/client.ts");
+    const { mongoStore } = await import("../src/store.ts");
+    const { mongoDeliverStore } = await import("../src/deliver/store.ts");
+    const { mongoMatchStore } = await import("../src/match/store.ts");
+    const { mongoVerifyStore } = await import("../src/verify/store.ts");
+    const { createVoiceRuntime } = await import("../src/deliver/voice_runtime.ts");
+    const { ObjectId } = await import("mongodb");
+    const db = await getDb(loadConfig());
+    const doc: ResourceDoc = {
+      sourceId: "task6-mongo-api-1",
+      kind: "shelter",
+      name: "Mongo API Shelter",
+      hours: "24/7",
+      partner: true,
+      status: "unknown",
+      verifiedAt: null,
+      loc: { type: "Point", coordinates: [-122.1, 47.5] },
+    };
+    const roadDoc: RoadDoc = {
+      cameraId: "wsdot-mongo-1",
+      name: "Mongo Test Rd",
+      status: "unknown",
+      verifiedAt: null,
+      loc: { type: "Point", coordinates: [-122.101, 47.501] },
+      imageUrl: "x",
+    };
+    const config = loadConfig({
+      REPLAY: "1",
+      TOOL_SECRET: "tool-secret",
+      ELEVENLABS_AGENT_ID_CHECKIN: "agent-checkin-1",
+      ELEVENLABS_VOICE_WEBHOOK_SECRET: "voice-test",
+    });
+    const verifyStore = mongoVerifyStore(db);
+    const voiceRuntime = (await import("../src/deliver/voice_runtime.ts")).createVoiceRuntime(config, {
+      deliver: async () => mongoDeliverStore(db),
+      verify: async () => verifyStore,
+    });
+    // Local DBs persist across suite runs; this test's own keys must start clean or
+    // the verify re-arm cap (correct behavior) makes the request already-exist.
+    await Promise.all([
+      db.collection(COLLECTIONS.resources).deleteMany({ sourceId: doc.sourceId }),
+      db.collection(COLLECTIONS.roads).deleteMany({ cameraId: roadDoc.cameraId }),
+      db.collection(COLLECTIONS.verifyRequests).deleteMany({ requestId: { $regex: `^vr:${doc.sourceId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:` } }),
+    ]);
+    const app = createApp(config, {
+      store: async () => mongoStore(db),
+      pipeline: async () => emptyPipelineResult(),
+      inbound: stubInboundRuntime(),
+      match: async () => mongoMatchStore(db),
+      deliver: async () => mongoDeliverStore(db),
+      verify: async () => verifyStore,
+      voice: voiceRuntime,
+    });
+    try {
+      await db.collection(COLLECTIONS.resources).updateOne(
+        { sourceId: doc.sourceId },
+        { $set: { ...doc, _id: new ObjectId() } },
+        { upsert: true },
+      );
+      await db.collection(COLLECTIONS.roads).updateOne(
+        { cameraId: roadDoc.cameraId },
+        { $set: { ...roadDoc, _id: new ObjectId() } },
+        { upsert: true },
+      );
+      // an active hazard covering the resource point, so /verify/run has a target
+      await mongoStore(db).upsertHazard(smokeHazard("hms-smoke:demo", Date.now()));
+      const secretHeaders = { "content-type": "application/json", Authorization: "Bearer tool-secret" };
+
+      // check-in through the real HTTP surface (previously: 503 on Atlas, _id in $set)
+      const checkin = await app.request("/tools/checkin", {
+        method: "POST",
+        body: JSON.stringify({ resourceId: doc.sourceId, status: "open", capacity: 9, manual: true }),
+        headers: secretHeaders,
+      });
+      expect(checkin.status).toBe(200);
+      const resourceDoc = await mongoStore(db).getResource(doc.sourceId);
+      expect(resourceDoc?.status).toBe("open");
+      expect(resourceDoc?.capacity).toBe(9);
+      expect(resourceDoc?.verifiedAt).not.toBeNull();
+
+      // roads/check round-trip (the second _id-in-$set crash path)
+      const roadRes = await app.request("/roads/check", {
+        method: "POST",
+        body: JSON.stringify({ cameraId: roadDoc.cameraId, status: "flooded", confidence: 0.9 }),
+        headers: secretHeaders,
+      });
+      expect(roadRes.status).toBe(200);
+      const roadStored = await mongoStore(db).getRoad(roadDoc.cameraId);
+      expect(roadStored?.status).toBe("flooded");
+      expect(roadStored?.verifiedAt).not.toBeNull();
+
+      // verify run creates a request, the poll checks it out, a failure webhook releases it
+      const run = await app.request("/verify/run", { method: "POST", body: "{}", headers: secretHeaders });
+      expect(run.status).toBe(200);
+      const { created } = (await run.json()) as { created: Array<{ requestId: string }> };
+      // assert by resource: the requestId embeds whichever active hazard the
+      // target matcher landed on, and a shared local DB can hold older fixture
+      // hazards that legitimately win that first-match order.
+      expect(created.map((r) => (r as { requestId: string; resourceId: string }).resourceId)).toContain(doc.sourceId);
+      const poll = await app.request("/tools/checkin/next?deviceId=dev-1", {
+        headers: { Authorization: "Bearer tool-secret" },
+      });
+      expect(((await poll.json()) as { requests: unknown[] }).requests.length).toBeGreaterThanOrEqual(1);
+
+      const { createHmac } = await import("node:crypto");
+      const raw = JSON.stringify({ type: "call_initiation_failure", data: { agent_id: "agent-checkin-1", conversation_id: "conv-fail-1", failure_reason: "busy" } });
+      const ts = Math.floor(Date.now() / 1000);
+      const failure = await app.request("/webhooks/voice/post-call", {
+        method: "POST",
+        body: raw,
+        headers: {
+          "content-type": "application/json",
+          "elevenlabs-signature": `t=${ts},v1=` + createHmac("sha256", "voice-test").update(`${ts}.${raw}`).digest("hex"),
+        },
+      });
+      expect(failure.status).toBe(200);
+      await voiceRuntime.drain();
+      const released = await db.collection(COLLECTIONS.verifyRequests).find({ resourceId: doc.sourceId }).toArray();
+      expect(released.some((r) => r["status"] === "answered" && r["outcome"] === "no-answer:busy")).toBe(true);
+      expect(released.some((r) => r["status"] === "dispatched")).toBe(false);
+    } finally {
+      await db.collection(COLLECTIONS.resources).deleteMany({ sourceId: doc.sourceId });
+      await db.collection(COLLECTIONS.roads).deleteMany({ cameraId: roadDoc.cameraId });
+      await db.collection(COLLECTIONS.verifyRequests).deleteMany({ resourceId: doc.sourceId });
+      await db.collection(COLLECTIONS.hazards).deleteMany({ sourceId: "hms-smoke:demo" });
+      await closeDb();
+    }
+  });
 });
 
 describe("src/roads check (confidence gate + adapter seam)", () => {

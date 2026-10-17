@@ -50,10 +50,14 @@ export function createVoiceRuntime(
       } catch {
         return { enqueued: false };
       }
-      // Only the transcription event carries an outcome; unknown future types ack+drop.
+      // Routable types: post_call_transcription carrying an outcome, and
+      // call_initiation_failure (the failure latch release, Task 6 fix round 1).
+      // Everything else (post_call_audio, unknown future types) acks and drops.
       if (typeof parsed !== "object" || parsed === null) return { enqueued: false };
       const payload = parsed as VoicePostCallPayload;
-      if (outcomeFor(payload) === null) return { enqueued: false };
+      const routable =
+        payload.type === "call_initiation_failure" || outcomeFor(payload) !== null;
+      if (!routable) return { enqueued: false };
       queue.enqueue(payload);
       return { enqueued: true };
     },

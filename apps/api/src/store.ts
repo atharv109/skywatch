@@ -25,11 +25,14 @@ export interface AppStore {
 }
 
 function mongoUpsertCol<T extends Record<string, any>>(db: Db, name: string, keyField: keyof T & string, doc: T): Promise<void> {
-  // $set on the whole doc: repeated loads of the same fixture set overwrite their
-  // own docs instead of duplicating them (idempotent replay).
+  // $set on the whole doc (minus _id — immutable, Mongo rejects a $set on it):
+  // repeated loads of the same fixture set overwrite their own docs instead of
+  // duplicating them (idempotent replay).
+  const { _id: _stripped, ...rest } = doc as Record<string, unknown>;
+  void _stripped;
   return db
     .collection(name)
-    .updateOne({ [keyField]: doc[keyField] }, { $set: doc }, { upsert: true })
+    .updateOne({ [keyField]: (doc as Record<string, unknown>)[keyField] }, { $set: rest }, { upsert: true })
     .then(() => undefined);
 }
 
@@ -59,10 +62,16 @@ export function mongoStore(db: Db): AppStore {
       return db.collection(COLLECTIONS.users).countDocuments();
     },
     async getResource(sourceId) {
-      return db.collection<ResourceDoc>(COLLECTIONS.resources).findOne({ sourceId });
+      // _id projected away: callers re-spread reads into $set upserts (check-in,
+      // roads/check) and must never carry the immutable key back in.
+      return db
+        .collection<ResourceDoc>(COLLECTIONS.resources)
+        .findOne({ sourceId }, { projection: { _id: 0 } });
     },
     async getRoad(cameraId) {
-      return db.collection<RoadDoc>(COLLECTIONS.roads).findOne({ cameraId });
+      return db
+        .collection<RoadDoc>(COLLECTIONS.roads)
+        .findOne({ cameraId }, { projection: { _id: 0 } });
     },
     upsertHazard(doc) {
       return mongoUpsertCol(db, COLLECTIONS.hazards, "sourceId", doc);

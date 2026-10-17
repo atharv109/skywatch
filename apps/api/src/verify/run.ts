@@ -41,8 +41,14 @@ async function partnerResourcesInsideHazards(
 
 /**
  * Idempotent: a re-run while a request for the same resource+hazard is still
- * pending/dispatched creates nothing (it is re-armed only once answered).
+ * pending/dispatched creates nothing; an answered one re-arms at most once per
+ * hour (verify/store.ts), and the whole resource is capped at
+ * MAX_CHECKINS_PER_RESOURCE_PER_HOUR answered check-ins per rolling hour —
+ * voice check-ins are the expensive, interrupting surface, so the cadence is
+ * bounded server-side (the judges-facing promise) regardless of who re-runs.
  */
+export const MAX_CHECKINS_PER_RESOURCE_PER_HOUR = 3;
+
 export async function createVerifyRuns(
   store: AppStore,
   verify: VerifyStore,
@@ -52,6 +58,8 @@ export async function createVerifyRuns(
   const targets = await partnerResourcesInsideHazards(store, body.now);
   const created: VerifyRequestDoc[] = [];
   for (const { resource, hazardSourceId } of targets) {
+    const answeredLastHour = await verify.countAnsweredSince(resource.sourceId, body.now - 3_600_000, body.now);
+    if (answeredLastHour >= MAX_CHECKINS_PER_RESOURCE_PER_HOUR) continue;
     const saved = await verify.createRequest({
       requestId: `vr:${resource.sourceId}:${hazardSourceId}`,
       resourceId: resource.sourceId,

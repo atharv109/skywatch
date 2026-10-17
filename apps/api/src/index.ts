@@ -8,6 +8,12 @@ export async function startServer(onStarted?: () => void) {
   const app = createApp(config);
   const server = serve({ fetch: app.fetch, port: config.port }, onStarted);
   process.on("SIGTERM", () => server.close());
+  // Operational visibility (Task 6 fix round 1): with TOOL_SECRET unset the
+  // tool/check-in/verify/roads endpoints accept unauthenticated writes. Demo-grade
+  // by decision — but nobody should boot production unaware.
+  if (!config.toolSecret) {
+    console.error("WARNING: TOOL_SECRET is unset — /tools/*, /verify/run and /roads/check accept unauthenticated calls (demo-grade; set TOOL_SECRET before exposing the API)");
+  }
   // Demo seed: with REPLAY=1 and an empty Mongo, load the shelter/camera fixtures.
   // Never blocks or fails boot — Mongo may still be down; the first replay call also seeds.
   seedOnBoot(config)

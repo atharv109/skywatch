@@ -53,7 +53,7 @@ export function verifyVoiceWebhook(args: {
   return "ok";
 }
 
-/** Loose on-purpose: unknown event types (`post_call_audio`, `call_initiation_failure`) ack+drop. */
+/** Loose on-purpose: unknown event types (`post_call_audio`) ack+drop. */
 export interface VoicePostCallPayload {
   type?: string;
   data?: {
@@ -61,6 +61,9 @@ export interface VoicePostCallPayload {
     conversation_id?: string;
     status?: string;
     user_id?: string | null;
+    failure_reason?: string;
+    /** call_initiation_failure SIP detail (from_number/to_number/error_reason...). */
+    sip?: { body?: { error_reason?: string } } | null;
     transcript?: Array<{ role?: string; message?: string } | null>;
     analysis?: { summary?: unknown } | null;
   } | null;
@@ -80,13 +83,19 @@ export function outcomeFor(payload: VoicePostCallPayload): string | null {
 }
 
 /**
- * The queue's processing target: route the outcome + transcript to its
- * conversation (user_id → user) or its verify request (agent_id → dispatch).
+ * The queue's processing target. Two routable events:
+ * - post_call_transcription: outcome + transcript routed to its conversation
+ *   (user_id → user) or its verify request (agent_id → dispatch).
+ * - call_initiation_failure: the call never happened — a dispatched request
+ *   MUST leave "dispatched" (otherwise it latches forever and the next unrelated
+ *   outcome pins onto it): recorded as answered `no-answer:<reason>`, plus a
+ *   conversation note when the payload carries a user_id.
  */
 export async function processVoiceOutcome(
   payload: VoicePostCallPayload,
   deps: { config: Config; deliver: DeliverStore; verify: VerifyStore; now: number },
 ): Promise<{ matched: "user" | "verify_request" | "none" }> {
+  if (payload.type === "call_initiation_failure") return processCallFailure(payload, deps);
   const data = payload.data;
   const outcome = outcomeFor(payload);
   if (!data || !outcome) {
@@ -115,4 +124,44 @@ export async function processVoiceOutcome(
   }
   console.error("voice post-call: no matching conversation (acked, recorded nowhere)");
   return { matched: "none" };
+}
+
+/** elevenlabs-sip-notes.md §2c/§4: failure_reason is "busy" | "no-answer" | "unknown". */
+function failureReason(payload: VoicePostCallPayload): string {
+  const data = payload.data ?? {};
+  const reason = data.failure_reason ?? data.sip?.body?.error_reason;
+  return typeof reason === "string" && reason.trim().length > 0 ? reason.trim().slice(0, 100) : "unknown";
+}
+
+async function processCallFailure(
+  payload: VoicePostCallPayload,
+  deps: { config: Config; deliver: DeliverStore; verify: VerifyStore; now: number },
+): Promise<{ matched: "user" | "verify_request" | "none" }> {
+  const data = payload.data ?? {};
+  const reason = failureReason(payload);
+  const userId = typeof data.user_id === "string" ? data.user_id : null;
+  let matched: "user" | "verify_request" | "none" = "none";
+  if (userId) {
+    const user = await deps.deliver.getUserById(userId);
+    if (user) {
+      await deps.deliver.appendConversation({
+        userId: user.id,
+        from: "bot",
+        text: `Voice call could not start (${reason}).`,
+        at: deps.now,
+      });
+      matched = "user";
+    }
+  }
+  const agentId = typeof data.agent_id === "string" ? data.agent_id : null;
+  if (agentId) {
+    const request = await deps.verify.latestDispatchedByAgent(agentId);
+    if (request) {
+      // Releasing the latch is the point: an answered failure can never swallow
+      // a later outcome for this agent.
+      await deps.verify.recordOutcome(request.requestId, `no-answer:${reason}`, data.conversation_id ?? null, deps.now);
+      return { matched: "verify_request" };
+    }
+  }
+  return { matched };
 }
