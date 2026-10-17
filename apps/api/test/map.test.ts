@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
 import { createApp } from "../src/server.ts";
-import { assembleMapState, CONFIDENCE_HALF_LIFE_MIN, confidenceFromVerified, displayedStatus, type MapInputs } from "../src/map/state.ts";
+import { assembleMapState, displayedStatus, confidenceFor, halfLifeMinutes, type MapInputs } from "../src/map/state.ts";
 import { memoryStore } from "../src/store.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import { seedScenarioBase } from "../src/ingest/scenario.ts";
@@ -43,7 +43,7 @@ const roadDoc = (verifiedAt: number | null, status: RoadDoc["status"]): RoadDoc 
 describe("assembleMapState (pure)", () => {
   const inputs: MapInputs = {
     hazards: [hazardDoc(0)],
-    resources: [resourceDoc(NOW - CONFIDENCE_HALF_LIFE_MIN * 60_000), resourceDoc(null, "unknown")],
+    resources: [resourceDoc(NOW - halfLifeMinutes.shelter * 60_000), resourceDoc(null, "unknown")],
     roads: [roadDoc(NOW - 10 * 60_000, "flooded"), roadDoc(null, "clear")],
     dots: [
       [-122.334981, 47.606214],
@@ -53,12 +53,19 @@ describe("assembleMapState (pure)", () => {
     now: NOW,
   };
 
-  it("decays confidence with the 30-min half-life and rounds to 2 decimals", () => {
-    expect(confidenceFromVerified(null, NOW)).toBe(0);
-    expect(confidenceFromVerified(NOW, NOW)).toBe(1);
-    // one half-life = 0.5
-    expect(confidenceFromVerified(NOW - CONFIDENCE_HALF_LIFE_MIN * 60_000, NOW)).toBeCloseTo(0.5, 5);
+  it("decays resource confidence with the shelter (30-min) half-life and rounds to 2 decimals", () => {
+    expect(confidenceFor("shelter", null, NOW)).toBe(0);
+    expect(confidenceFor("shelter", NOW, NOW)).toBe(1);
+    // one shelter half-life = 0.5
+    expect(confidenceFor("shelter", NOW - halfLifeMinutes.shelter * 60_000, NOW)).toBeCloseTo(0.5, 5);
     expect(assembleMapState(inputs).resources[0]?.confidence).toBe(0.5);
+  });
+
+  it("decays road confidence with the 15-min half-life (half of the shelter decay at the same age)", () => {
+    expect(halfLifeMinutes.road).toBe(15);
+    expect(halfLifeMinutes.shelter).toBe(30);
+    expect(confidenceFor("road", NOW - 10 * 60_000, NOW)).toBeCloseTo(0.63, 2);
+    expect(assembleMapState(inputs).roads[0]?.confidence).toBe(0.63);
   });
 
   it("downgrades open statuses with confidence < 0.5 to unknown (Global Constraint 3 display rule)", () => {
@@ -70,12 +77,29 @@ describe("assembleMapState (pure)", () => {
     expect(state.resources[0]?.confidence).toBe(0.35);
   });
 
-  it("passes road statuses through and carries cameraId", () => {
+  it("review case: 20-min-old road verdict shows unknown at 0.44 while a 20-min-old resource stays open at ~0.63", () => {
+    const state = assembleMapState({
+      ...inputs,
+      resources: [resourceDoc(NOW - 20 * 60_000)],
+      roads: [roadDoc(NOW - 20 * 60_000, "flooded")],
+    });
+    // resource: 0.5^(20/30) = 0.63 >= 0.5 -> status unchanged
+    expect(state.resources[0]?.confidence).toBe(0.63);
+    expect(state.resources[0]?.status).toBe("open");
+    // road: 0.5^(20/15) = 0.397 < 0.5 -> flipped to unknown (same age, different half-life)
+    expect(state.roads[0]?.confidence).toBe(0.4);
+    expect(state.roads[0]?.status).toBe("unknown");
+  });
+
+  it("fresh flooded roads keep their verdict; unverified ones are unknown; clear stays clear", () => {
     const state = assembleMapState(inputs);
     expect(state.roads).toHaveLength(2);
-    expect(state.roads[0]?.status).toBe("flooded");
+    expect(state.roads[0]?.status).toBe("flooded"); // 10-min-old road verdict = 0.63, above the floor
     expect(state.roads[0]?.cameraId).toBe("wsdot-9800");
     expect(state.roads[1]?.status).toBe("clear");
+    const staleBlocked = assembleMapState({ ...inputs, roads: [roadDoc(NOW - 30 * 60_000, "blocked")] });
+    expect(staleBlocked.roads[0]?.status).toBe("unknown");
+    expect(staleBlocked.roads[0]?.confidence).toBe(0.25);
   });
 
   it("anonymizes user dots: rounded to ~1 km grid, never ids or phones", () => {

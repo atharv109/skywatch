@@ -43,23 +43,28 @@ export interface MapState {
 }
 
 /**
- * Confidence from the 30-min half-life rule (Global Constraint 3): 1.0 at
- * verification, halved every 30 min, floored at 0. confidence < 0.5 forces the
- * displayed status to "unknown" — computed at read time so stored docs never lie.
+ * Confidence decays from `verifiedAt` with the spec half-lives (shelters 30 min,
+ * roads 15 min) — the per-kind source of truth lives in src/confidence.ts and
+ * Task 6's check-in endpoints import it from there.
  */
-export const CONFIDENCE_HALF_LIFE_MIN = 30;
-
-export function confidenceFromVerified(verifiedAt: number | null, now = Date.now()): number {
-  if (verifiedAt === null) return 0;
-  const minutes = Math.max(0, (now - verifiedAt) / 60_000);
-  return Math.max(0, Math.pow(0.5, minutes / CONFIDENCE_HALF_LIFE_MIN));
-}
+export { confidenceFor, halfLifeMinutes } from "../confidence.ts";
+import { confidenceFor } from "../confidence.ts";
 
 export function displayedStatus(status: string, confidence: number): "open" | "unknown" | "closed" {
   if (status === "open" && confidence < 0.5) return "unknown";
   if (status === "open") return "open";
   if (status === "closed") return "closed";
   return "unknown";
+}
+
+/**
+ * Road variant of the same display rule: a fresh flooded/blocked verdict (confidence
+ * >= 0.5) shows as stored; below 0.5 the map shows "unknown" while keeping the
+ * (low) confidence. clear/unknown stay as stored.
+ */
+function isExpiredRoadStatus(status: string, confidence: number): string {
+  if ((status === "flooded" || status === "blocked") && confidence < 0.5) return "unknown";
+  return status;
 }
 
 export interface MapInputs {
@@ -92,7 +97,9 @@ export function assembleMapState(inputs: MapInputs): MapState {
       source: h.source,
     })),
     resources: inputs.resources.map((r) => {
-      const confidence = confidenceFromVerified(r.verifiedAt, now);
+      // All non-road resources (shelters, pharmacies, community centers) ride the
+      // shelter half-life; only road verdicts are more perishable (15 min).
+      const confidence = confidenceFor("shelter", r.verifiedAt, now);
       return {
         sourceId: r.sourceId,
         kind: r.kind,
@@ -105,14 +112,14 @@ export function assembleMapState(inputs: MapInputs): MapState {
       };
     }),
     roads: inputs.roads.map((r) => {
-      const confidence = confidenceFromVerified(r.verifiedAt, now);
+      const confidence = confidenceFor("road", r.verifiedAt, now);
       return {
         cameraId: r.cameraId,
         name: r.name,
-        // Road statuses (flooded/blocked/clear/unknown) are shown as stored; the
-        // confidence<0.5 => "unknown" downgrade is a briefing-time rule (Task 4),
-        // while expired verdicts simply carry low confidence here.
-        status: r.status,
+        // Road verdicts decay twice as fast (15-min half-life): an expired
+        // flooded/blocked verdict keeps its label's low confidence but flips to
+        // "unknown" once below 0.5, matching the Global Constraint 3 display rule.
+        status: isExpiredRoadStatus(r.status, confidence),
         confidence: Math.round(confidence * 100) / 100,
         lat: r.loc.coordinates[1],
         lon: r.loc.coordinates[0],
