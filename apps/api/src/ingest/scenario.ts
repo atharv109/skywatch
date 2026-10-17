@@ -69,18 +69,23 @@ export async function loadScenario(store: AppStore, scenarioId: ScenarioId): Pro
  * so fixture and live agree on severity).
  */
 async function buildFloodHazards(validFrom: number, validTo: number): Promise<HazardDoc[]> {
+  // Gauge metadata sits in the FeatureCollection's `properties` (as the real NOAA/USGS
+  // GeoJSON feeds do), features carry the valley polygons.
   const flood = (await readFixture("flood-demo.geojson")) as {
-    gaugeSite?: string;
-    gaugeName?: string;
-    gageHeightFt?: number;
-    floodStageFt?: number;
-    qualifiers?: string[];
-    observed?: string;
+    properties?: {
+      gaugeSite?: string;
+      gaugeName?: string;
+      gageHeightFt?: number;
+      floodStageFt?: number;
+      qualifiers?: string[];
+      observed?: string;
+    };
     features?: Array<{ geometry?: HazardDoc["geometry"]; properties?: Record<string, unknown> }>;
   };
-  const site = flood.gaugeSite ?? DEMO_GAUGE_SITE;
-  const gage = flood.gageHeightFt ?? 0;
-  const stage = flood.floodStageFt ?? FLOOD_STAGES[site] ?? 0;
+  const meta = flood.properties ?? {};
+  const site = meta.gaugeSite ?? DEMO_GAUGE_SITE;
+  const gage = meta.gageHeightFt ?? 0;
+  const stage = meta.floodStageFt ?? FLOOD_STAGES[site] ?? 0;
   const severity = severityFromGage(gage, stage);
   if (severity === null) {
     throw new Error("flood fixture gauge reading is below half of flood stage; no flood hazard");
@@ -98,11 +103,11 @@ async function buildFloodHazards(validFrom: number, validTo: number): Promise<Ha
       source: "USGS gauge (demo fixture)",
       extra: {
         gaugeSite: site,
-        gaugeName: flood.gaugeName ?? null,
+        gaugeName: meta.gaugeName ?? null,
         gageHeightFt: gage,
         floodStageFt: stage,
-        observed: flood.observed ?? null,
-        qualifiers: flood.qualifiers ?? ["P"],
+        observed: meta.observed ?? null,
+        qualifiers: meta.qualifiers ?? ["P"],
       },
     }));
 }

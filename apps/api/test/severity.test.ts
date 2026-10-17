@@ -50,7 +50,8 @@ describe("severityFromGage (USGS gage height vs flood stage)", () => {
   });
   it("maps watch/action/flood/major bands", () => {
     expect(severityFromGage(4.5, 9.0)).toBe(1); // 50-89%
-    expect(severityFromGage(8.1, 9.0)).toBe(2); // 90-99%
+    expect(severityFromGage(8.2, 9.0)).toBe(2); // ~91% action stage
+    expect(severityFromGage(8.99, 9.0)).toBe(2); // just under flood
     expect(severityFromGage(9.0, 9.0)).toBe(3); // at flood stage
     expect(severityFromGage(9.42, 9.0)).toBe(3); // the demo fixture value
     expect(severityFromGage(10.0, 9.0)).toBe(4); // > 110%

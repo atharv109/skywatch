@@ -118,22 +118,28 @@ describe("POST /scenario/:id/replay", () => {
   });
 });
 
-// Full pipeline through real Mongo: run when MONGODB_URI is set (same rule as Task 1's db test).
+// Full pipeline against real Mongo: runs when MONGODB_URI is set (same rule as Task 1's db test).
 describe.skipIf(!process.env.MONGODB_URI)("scenario replay against real Mongo", () => {
   it("seeds collections and stays idempotent across route calls", async () => {
+    const { defaultDeps } = await import("../src/deps.ts");
     const { closeDb } = await import("../src/db/client.ts");
-    const fresh = await import("../src/deps.ts").then((m) => m.defaultDeps);
     const config = loadConfig();
-    const app = createApp(config, fresh(config));
+    const deps = defaultDeps(config);
+    const app = createApp(config, deps);
+
     const res = await app.request("/scenario/smoke/replay", { method: "POST" });
     expect(res.status).toBe(200);
-    const count1 = (await app.request("/map/state")).status;
-    expect(count1).toBe(200);
+    const first = (await res.json()) as { hazards: number };
+    const state = await app.request("/map/state");
+    expect(state.status).toBe(200);
+
     const res2 = await app.request("/scenario/smoke/replay", { method: "POST" });
-    const store = await fresh(config).then((d) => d.store(config));
-    const hazards = await store.listHazards();
-    await res2.json();
-    expect((await fresh(config).then((d) => d.store(config))).listHazards()).resolves.toHaveLength(hazards.length);
+    expect(res2.status).toBe(200);
+    const second = (await res2.json()) as { hazards: number };
+    expect(second.hazards).toBe(first.hazards);
+
+    const store = await deps.store(config);
+    expect((await store.listHazards()).length).toBe(first.hazards);
     await closeDb();
   });
 });

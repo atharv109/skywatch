@@ -42,7 +42,13 @@ describe("NWS alerts fetcher (injected fetch)", () => {
       },
       {
         geometry: { type: "Point", coordinates: [-122.3, 47.6] },
-        properties: { id: "urn:oid:2.49.0.1.840.0.test.003.1", event: "Air Quality Alert", severity: "Moderate" },
+        properties: {
+          id: "urn:oid:2.49.0.1.840.0.test.003.1",
+          event: "Air Quality Alert",
+          severity: "Moderate",
+          effective: "2026-10-17T19:00:00+00:00",
+          expires: "2026-10-18T02:00:00+00:00",
+        },
       },
     ],
   };
@@ -87,8 +93,7 @@ describe("AQI fetchers (injected fetch)", () => {
       fetcher: jsonFetcher([{ ParameterName: "O3", AQI: 30 }, { ParameterName: "PM2.5", AQI: 41, DateObserved: "2026-10-17T08:00:00-07:00" }], capture),
     });
     expect(capture.url).toContain("airnowapi.org/aq/observation/latLong/current");
-    expect(capture.url).not.toContain("API_KEY=k");
-    expect(capture.url).toContain("API_KEY"); // key is on the URL by AirNow's contract
+    expect(capture.url).toContain("API_KEY=k"); // key travels on the URL by AirNow's contract
     expect(obs?.source).toBe("AirNow");
     expect(obs?.aqi).toBe(41);
   });

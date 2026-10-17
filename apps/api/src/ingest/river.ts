@@ -10,6 +10,10 @@ export const GAUGE_COORDS: Record<string, [number, number]> = {
 };
 
 interface FloodFixturePayload {
+  properties?: FloodFixtureMeta;
+}
+
+interface FloodFixtureMeta {
   gaugeSite?: string;
   gaugeName?: string;
   gageHeightFt?: number;
@@ -78,18 +82,20 @@ export async function fetchGaugeReadings(
   // REPLAY=1: derive the recorded Snoqualmie gauge reading from the flood fixture.
   if (opts.replay) {
     const fixture = (await readFixture("flood-demo.geojson")) as FloodFixturePayload;
-    const observed = fixture.observed ? Date.parse(fixture.observed) : Date.now();
-    const siteId = fixture.gaugeSite ?? DEMO_GAUGE_SITE;
+    const meta = fixture.properties ?? {};
+    const observed = meta.observed ? Date.parse(meta.observed) : Date.now();
+    const siteId = meta.gaugeSite ?? DEMO_GAUGE_SITE;
     const geo = GAUGE_COORDS[siteId];
-    if (fixture.gageHeightFt === undefined) return [];
+    if (meta.gageHeightFt === undefined) return [];
+    if (geo === undefined) return [];
     return [
       {
         siteId,
-        siteName: fixture.gaugeName ?? siteId,
-        lat: geo?.[1] ?? Number.NaN,
-        lon: geo?.[0] ?? Number.NaN,
-        gageHeightFt: fixture.gageHeightFt,
-        qualifiers: fixture.qualifiers ?? ["P"],
+        siteName: meta.gaugeName ?? siteId,
+        lat: geo[1],
+        lon: geo[0],
+        gageHeightFt: meta.gageHeightFt,
+        qualifiers: meta.qualifiers ?? ["P"],
         observedMs: Number.isFinite(observed) ? observed : Date.now(),
       },
     ];

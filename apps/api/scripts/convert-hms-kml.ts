@@ -114,10 +114,12 @@ function main(): void {
       });
     if (!overlaps(ringBbox(ring))) continue;
     const clipped = clipRing(ring);
-    if (clipped.length < 4) continue; // fully outside after clipping
-    // close the ring and round to 3 decimals (~110 m) to keep the fixture small
-    const coords = [clipped.map(([x, y]) => [r3(x), r3(y)] as [number, number])];
-    if (coords[0]!.length === 0) continue;
+    if (clipped.length < 4) continue; // degenerate after clipping
+    // round to 3 decimals (~110 m) to keep the fixture small, then close the ring
+    const rounded = clipped.map(([x, y]) => [r3(x), r3(y)] as [number, number]);
+    const [first] = rounded;
+    const last = rounded[rounded.length - 1]!;
+    if (first && (first[0] !== last[0] || first[1] !== last[1])) rounded.push([first[0], first[1]]);
     features.push({
       type: "Feature",
       properties: {
@@ -126,7 +128,7 @@ function main(): void {
         End: `${end[1]} ${end[2]}`,
         Satellite: satellite ?? "",
       },
-      geometry: { type: "Polygon", coordinates: [coords[0]!] },
+      geometry: { type: "Polygon", coordinates: [rounded] },
     });
   }
   const geojson = {

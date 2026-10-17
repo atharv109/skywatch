@@ -34,14 +34,14 @@ describe("committed fixtures", () => {
     expect(lines[0]).toBe("zip\tlat\tlon");
     let previous = "";
     for (const line of lines.slice(1)) {
-      const [zip, lat, lon] = line.split("\t");
+      const [zip = "", lat = "0", lon = "0"] = line.split("\t");
       expect(zip).toMatch(/^\d{5}$/);
       expect(Number(lat)).toBeGreaterThanOrEqual(45.5);
       expect(Number(lat)).toBeLessThanOrEqual(49.1);
       expect(Number(lon)).toBeGreaterThanOrEqual(-125.0);
       expect(Number(lon)).toBeLessThanOrEqual(-116.8);
       expect(zip > previous, `sorted at ${zip}`).toBe(true);
-      previous = zip as string;
+      previous = zip;
     }
     expect(lines.length - 1).toBeGreaterThan(700);
   });
@@ -85,13 +85,11 @@ describe("committed fixtures", () => {
 
   it("flood-demo.geojson is a Polygon over the Snoqualmie valley anchored on the gauge values", () => {
     const parsed = JSON.parse(readFileSync(fixturePath("flood-demo.geojson"), "utf8")) as {
-      gaugeSite: string;
-      gageHeightFt: number;
-      floodStageFt: number;
+      properties: { gaugeSite: string; gageHeightFt: number; floodStageFt: number };
       features: Array<{ geometry: { type: string } }>;
     };
-    expect(parsed.gaugeSite).toBe("12144500");
-    expect(parsed.gageHeightFt).toBeGreaterThan(parsed.floodStageFt);
+    expect(parsed.properties.gaugeSite).toBe("12144500");
+    expect(parsed.properties.gageHeightFt).toBeGreaterThan(parsed.properties.floodStageFt);
     expect(parsed.features.every((f) => f.geometry.type === "Polygon")).toBe(true);
   });
 
