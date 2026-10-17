@@ -1,0 +1,107 @@
+{
+ "comment": "Inbound-message samples for the Photon (Stable Spectrum) webhook contract. Shape copied verbatim from the documented delivery example (photon.codes /docs/webhooks/events, verified 2026-10-17, saved in skywatch-notes): event 'messages', space.id opaque DM id, message.sender.id = sender handle, content.type 'text'. Phones are dummy E.164 values. Task 3 tests sign these payloads with the webhook secret and POST them to /webhooks/photon/message.",
+ "samples": [
+  {
+   "label": "hi",
+   "note": "first contact - grants consent (text+voice), starts signup",
+   "payload": {
+    "event": "messages",
+    "space": { "id": "any;-;+15551230001", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+    "message": {
+     "id": "spc-msg-00000000-0000-4000-8000-000000000001",
+     "platform": "iMessage",
+     "direction": "inbound",
+     "timestamp": "2026-10-17T19:06:32.000Z",
+     "sender": { "id": "+15551230001", "platform": "iMessage" },
+     "space": { "id": "any;-;+15551230001", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+     "content": { "type": "text", "text": "hi" }
+    }
+   }
+  },
+  {
+   "label": "address",
+   "note": "signup asks-address state - full street address for Census Geocoder",
+   "payload": {
+    "event": "messages",
+    "space": { "id": "any;-;+15551230002", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+    "message": {
+     "id": "spc-msg-00000000-0000-4000-8000-000000000002",
+     "platform": "iMessage",
+     "direction": "inbound",
+     "timestamp": "2026-10-17T19:08:00.000Z",
+     "sender": { "id": "+15551230002", "platform": "iMessage" },
+     "space": { "id": "any;-;+15551230002", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+     "content": { "type": "text", "text": "101 Yesler Way, Seattle, WA 98104" }
+    }
+   }
+  },
+  {
+   "label": "language",
+   "note": "signup asks-lang state - Spanish",
+   "payload": {
+    "event": "messages",
+    "space": { "id": "any;-;+15551230003", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+    "message": {
+     "id": "spc-msg-00000000-0000-4000-8000-000000000003",
+     "platform": "iMessage",
+     "direction": "inbound",
+     "timestamp": "2026-10-17T19:09:00.000Z",
+     "sender": { "id": "+15551230003", "platform": "iMessage" },
+     "space": { "id": "any;-;+15551230003", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+     "content": { "type": "text", "text": "espanol por favor" }
+    }
+   }
+  },
+  {
+   "label": "stop",
+   "note": "STOP kills text and voice consent - handled immediately, no reply",
+   "payload": {
+    "event": "messages",
+    "space": { "id": "any;-;+15551230004", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+    "message": {
+     "id": "spc-msg-00000000-0000-4000-8000-000000000004",
+     "platform": "iMessage",
+     "direction": "inbound",
+     "timestamp": "2026-10-17T19:10:00.000Z",
+     "sender": { "id": "+15551230004", "platform": "iMessage" },
+     "space": { "id": "any;-;+15551230004", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+     "content": { "type": "text", "text": "STOP" }
+    }
+   }
+  },
+  {
+   "label": "question",
+   "note": "active user asking about hazards (conversational, Task 6 tool loop)",
+   "payload": {
+    "event": "messages",
+    "space": { "id": "any;-;+15551230005", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+    "message": {
+     "id": "spc-msg-00000000-0000-4000-8000-000000000005",
+     "platform": "iMessage",
+     "direction": "inbound",
+     "timestamp": "2026-10-17T19:11:00.000Z",
+     "sender": { "id": "+15551230005", "platform": "iMessage" },
+     "space": { "id": "any;-;+15551230005", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+     "content": { "type": "text", "text": "Is there smoke near me right now?" }
+    }
+   }
+  },
+  {
+   "label": "opt-in-voice",
+   "note": "user grants the voice check-in flow",
+   "payload": {
+    "event": "messages",
+    "space": { "id": "any;-;+15551230006", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+    "message": {
+     "id": "spc-msg-00000000-0000-4000-8000-000000000006",
+     "platform": "iMessage",
+     "direction": "inbound",
+     "timestamp": "2026-10-17T19:12:00.000Z",
+     "sender": { "id": "+15551230006", "platform": "iMessage" },
+     "space": { "id": "any;-;+15551230006", "platform": "iMessage", "type": "dm", "phone": "+15551239999" },
+     "content": { "type": "text", "text": "yes, you can call me to check in" }
+    }
+   }
+  }
+ ]
+}

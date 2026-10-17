@@ -1,0 +1,52 @@
+{
+ "type": "FeatureCollection",
+ "properties": {
+  "comment": "Synthetic flood-demo fixture, hand-entered 2026-10-17. Polygon covers the lower Snoqualmie River floodplain (Fall City / Carnation); gage values are anchored on the USGS Snoqualmie gauge 12144500 (verified live response in skywatch-notes/samples/usgs_snoqualmie_12144500.json, whose real observed gage height was 2.56 ft on 2026-10-17). Values here are demo values: 9.42 ft vs flood stage 9.0 ft. Flood stage 9.0 ft is a documented assumption (see src/ingest/river.ts FLOOD_STAGES) - verify against NWS AHPS before any real use.",
+  "gaugeSite": "12144500",
+  "gaugeName": "SNOQUALMIE RIVER NEAR SNOQUALMIE, WA",
+  "gageHeightFt": 9.42,
+  "floodStageFt": 9.0,
+  "qualifiers": ["P"],
+  "observed": "2020-09-11T09:30:00.000-07:00"
+ },
+ "features": [
+  {
+   "type": "Feature",
+   "properties": { "area": "Lower Snoqualmie valley near Fall City", "stage": "over flood stage" },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [-121.940, 47.650],
+      [-121.860, 47.648],
+      [-121.760, 47.640],
+      [-121.720, 47.610],
+      [-121.800, 47.590],
+      [-121.900, 47.595],
+      [-121.960, 47.620],
+      [-121.940, 47.650]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": { "area": "Snoqualmie River flats near Carnation", "stage": "over flood stage" },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [-121.950, 47.780],
+      [-121.870, 47.775],
+      [-121.780, 47.750],
+      [-121.760, 47.720],
+      [-121.830, 47.700],
+      [-121.920, 47.720],
+      [-121.960, 47.750],
+      [-121.950, 47.780]
+     ]
+    ]
+   }
+  }
+ ]
+}

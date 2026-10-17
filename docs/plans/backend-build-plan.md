@@ -73,6 +73,19 @@ Plan of record for `apps/api` + fixtures + data collection. Binding spec: `Downl
 - Tests: checkin flips status visible in next brief + map state; expired confidence ⇒ unknown; post-call HMAC reject path; tool loop mocked.
 
 ### Task 7 — Deploy + wiring + README + final smoke
+
+### Task 8 (STRETCH, gated) — Offline Mode backend (`/mesh/sync`)
+- **Gate (ruling):** start ONLY after the 9 PM checkpoint passes (Spanish voice call delivered). If end-to-end gateway sync+downlink is not working by 3 AM, cut — demo keeps one slide. Core always wins over this task; Task 6 completion outranks it.
+- Packet format (locked): `{id, type: beacon|hazard|ack|brief, status, lat, lon, ts, hops, ttl: 7, photo?, deviceId, sig}`; dedup by `id`; TTL decrement on forward; rescue beacons (`Trapped|Injured|Need Rescue`) NEVER downgraded for confidence.
+- Collections: `mesh_packets` (raw packets, unique index on id), `beacons` (clustered rescue reports: kind Trapped|Injured|Need Rescue, loc 2dsphere, clusterId, priority rank, firstSeen, lastSeen, ackedAt|null).
+- `POST /mesh/sync`: accepts `{ deviceId, lat, lon, packets[] }` (gateway batch); verifies each packet `sig` — DEMO-GRADE scheme: device generates ephemeral Ed25519 keypair in-browser, `sig = sign(id|type|ts|lat|lon|deviceId)`; pubkey registered on first packet (`deviceId→pubkey` map, one write); mismatch ⇒ packet marked `unscored/invalid`, never dropped silently. Dedup by id across syncs.
+- Scoring (backend, sync-time, explainable): starts 0.5; boosts/penalties with recorded reasons array — [+0.2 if packet location falls inside an active Skywatch smoke/flood zone or high AQI area; photo check (Task-vision hook `POST /roads/check`-style adapter, may be NOT_WIRED → recorded as "unscored" reason); +0.1 per independent nearby report (≤3), never required; time decay half-life 30 min same formula as shelters]. Output `{score, reasons[]}` stored on packet; reasons shown on dashboard.
+- Clustering: rescue beacons with same kind within 100 m → one `beacons` cluster, priority = trapped > injured > need-rescue, rank by newest firstSeen then score-independent.
+- Downlink bundle (the response, and what a gateway rebroadcasts): for its lat/lon — area briefs per language (pre-computed via Task 4 builder), nearest verified-open shelter per language, blocked roads, and `ack` packets for the device's contributed beacons ("responders have seen your beacon"). Bundle is compact JSON, same packet format with `type: brief`/`ack`.
+- `GET /mesh/state` (dashboard dark-zone layer; also merged into `/map/state` as optional section when any packets exist): rescue clusters ranked, hazard reports w/ score+reasons, coverage dots (deviceId→loc, anonymized deviceId).
+- SMS-fallback sub-endpoint `POST /mesh/sms` (only if time; Delivery-owned client side): gateway texts compressed packet lines to Photon number as uplink; reply text carries downlink bundle. Backend renders compressed form via same scoring path.
+- Tests: sig invalid → unscored not dropped; dedup across two syncs; cluster merge + priority order; never-downgrade rule for rescue beacons; downlink bundle contains ack for contributed beacon.
+- Owners: backend = this task (Atharv); photo check = vision teammate adapter; offline web page + gateway button = frontend; SMS fallback = Delivery, last.
 - Render-friendly start (`render.yaml` or docs), Node 20, health check path `/health`; production env var checklist README table (what's set where, who owns which secret).
 - README: mention Photon, ElevenLabs, Gemini, MongoDB Atlas, Tiger Data (thin integration: status_events mirror write behind `src/verify/tiger.ts`, optional-by-env — only if time; else document).
 - End-to-end smoke script `apps/api/scripts/smoke.ts`: replay → seeded user → brief → render (fixture-Gemini optional) → map state asserts; runs against local or deployed URI with `SMOKE_BASE_URL`.

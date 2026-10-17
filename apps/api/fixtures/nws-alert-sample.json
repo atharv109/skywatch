@@ -1,0 +1,63 @@
+{
+ "type": "FeatureCollection",
+ "properties": {
+  "comment": "Synthetic NWS Air Quality Alert fixture, hand-carved on 2026-10-17 against the documented live feature schema (skywatch-notes/samples/nws_alert_feature_example.json, verified from a real national active-alerts pull the same day). Geometry/wording anchored on the Sept 11-12 2020 west-coast smoke event (King County, WA). UGC WAC033 + SAME 053033 = King County, WA."
+ },
+ "features": [
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.skywatch-demo-sept2020-aq.001.1",
+   "type": "Feature",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [-122.52, 47.73],
+      [-122.24, 47.73],
+      [-122.24, 47.49],
+      [-122.52, 47.49],
+      [-122.52, 47.73]
+     ]
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.skywatch-demo-sept2020-aq.001.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.skywatch-demo-sept2020-aq.001.1",
+    "areaDesc": "King County, WA",
+    "geocode": {
+     "SAME": ["053033"],
+     "UGC": ["WAC033"]
+    },
+    "affectedZones": ["https://api.weather.gov/zones/county/WAC033"],
+    "references": [],
+    "sent": "2020-09-11T08:00:00-07:00",
+    "effective": "2020-09-11T08:00:00-07:00",
+    "onset": "2020-09-11T08:00:00-07:00",
+    "expires": "2020-09-12T12:00:00-07:00",
+    "ends": "2020-09-12T12:00:00-07:00",
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Moderate",
+    "certainty": "Likely",
+    "urgency": "Expected",
+    "event": "Air Quality Alert",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Seattle WA",
+    "headline": "Air Quality Alert issued September 11 for King County until September 12 by NWS Seattle WA",
+    "description": "* WHAT...The Washington State Department of Ecology has issued an Air Quality Alert for wildfire smoke. PM2.5 concentrations in the unhealthy range.\n\n* WHERE...King County.\n\n* WHEN...Until noon PDT Saturday.\n\n* IMPACTS...Wildfire smoke from the west coast will impact air quality. Sensitive groups should limit prolonged outdoor exertion.",
+    "instruction": "Limit outdoor activity. Close windows and run air conditioning if available.",
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+     "BLOCKCHANNEL": ["EAS", "NWEM", "CMAS"]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": { "SAME": ["NWS"], "NationalWeatherService": ["SEW"] }
+   }
+  }
+ ]
+}

@@ -1,0 +1,117 @@
+{
+ "origin": "WSDOT Traveler Information API HighwayCamerasREST.svc GetCamerasAsJson (access-code fetch, code not stored — camera ImageURLs are public)",
+ "cameras": [
+  {
+   "CameraID": 9800,
+   "Title": "SR 99 at MP 30.9: NB Tunnel, South end",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "N",
+    "RoadName": "SR 99",
+    "Latitude": 47.601308,
+    "Longitude": -122.335987
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/099vc03098.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 9367,
+   "Title": "I-5 at MP 166.7: Mercer St Express Lanes",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "I-5",
+    "Latitude": 47.624417,
+    "Longitude": -122.328129
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/005vc16675.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 1089,
+   "Title": "I-90 at MP 3.1: 18th Ave S (Near Rainier Ave)",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "I-90",
+    "Latitude": 47.590842,
+    "Longitude": -122.310472
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/090vc00318.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 1517,
+   "Title": "SR 599 at MP 0.4: S 133rd St",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "SR 599",
+    "Latitude": 47.486461,
+    "Longitude": -122.276499
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/599vc00041.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 9263,
+   "Title": "SR 99 at MP 32.6: 6th Ave/Harrison",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "SR 99",
+    "Latitude": 47.622305,
+    "Longitude": -122.344528
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/099vc03266.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 9952,
+   "Title": "SR 202 at MP 12.26: 236th Ave NE",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "SR 202",
+    "Latitude": 47.64397,
+    "Longitude": -122.023212
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/202vc01226.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 9995,
+   "Title": "I-90 at MP 24.9",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "I-90",
+    "Latitude": 47.505926,
+    "Longitude": -121.898696
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/090vc02495.jpg",
+   "IsActive": true
+  },
+  {
+   "CameraID": 1090,
+   "Title": "I-90 at MP 5: Floating Bridge Midspan",
+   "Region": "NW",
+   "CameraLocation": {
+    "Description": null,
+    "Direction": "B",
+    "RoadName": "I-90",
+    "Latitude": 47.589585,
+    "Longitude": -122.270109
+   },
+   "ImageURL": "https://images.wsdot.wa.gov/nw/090vc00508.jpg",
+   "IsActive": true
+  }
+ ]
+}
