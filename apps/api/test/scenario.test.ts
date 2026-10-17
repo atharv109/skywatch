@@ -3,6 +3,7 @@ import { loadConfig } from "../src/config.ts";
 import { createApp } from "../src/server.ts";
 import { memoryStore, type AppStore } from "../src/store.ts";
 import { loadScenario, type LoadedScenario } from "../src/ingest/scenario.ts";
+import { stubInboundRuntime } from "../src/deliver/runtime.ts";
 import type { HazardDoc } from "../src/types/docs.ts";
 
 function depsWith(store: AppStore, pipelineCalls?: { count: number }) {
@@ -11,6 +12,7 @@ function depsWith(store: AppStore, pipelineCalls?: { count: number }) {
     pipeline: async () => {
       if (pipelineCalls) pipelineCalls.count += 1;
     },
+    inbound: stubInboundRuntime(),
   };
 }
 
@@ -111,6 +113,7 @@ describe("POST /scenario/:id/replay", () => {
         throw new Error("mongo down");
       },
       pipeline: async () => undefined,
+      inbound: stubInboundRuntime(),
     });
     const res = await app.request("/scenario/smoke/replay", { method: "POST" });
     expect(res.status).toBe(503);

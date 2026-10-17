@@ -5,6 +5,7 @@ import { assembleMapState, displayedStatus, confidenceFor, halfLifeMinutes, type
 import { memoryStore } from "../src/store.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import { seedScenarioBase } from "../src/ingest/scenario.ts";
+import { stubInboundRuntime } from "../src/deliver/runtime.ts";
 
 const NOW = Date.UTC(2026, 9, 17, 20, 0);
 
@@ -122,6 +123,7 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
     return createApp(loadConfig({}), {
       store: async () => store,
       pipeline: async () => undefined,
+      inbound: stubInboundRuntime(),
     });
   }
 
@@ -143,6 +145,7 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
         throw new Error("mongo down");
       },
       pipeline: async () => undefined,
+      inbound: stubInboundRuntime(),
     });
     const res = await app.request("/map/state");
     expect(res.status).toBe(503);
