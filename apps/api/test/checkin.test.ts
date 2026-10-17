@@ -385,7 +385,11 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: checkin write + verify_re
       imageUrl: "x",
     };
     const config = loadConfig({
-      REPLAY: "1",
+      // REPLAY=0 on purpose: seed-on-boot (REPLAY=1 + empty DB) would add the fixture
+      // partners as /verify/run targets, and the single failure-release routes to the
+      // most-recently-dispatched request — not necessarily ours. This test is about
+      // the round-trip, not seeding; replay route still works in REPLAY=0.
+      REPLAY: "0",
       TOOL_SECRET: "tool-secret",
       ELEVENLABS_AGENT_ID_CHECKIN: "agent-checkin-1",
       ELEVENLABS_VOICE_WEBHOOK_SECRET: "voice-test",
@@ -485,7 +489,8 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: checkin write + verify_re
       await db.collection(COLLECTIONS.hazards).deleteMany({ sourceId: "hms-smoke:demo" });
       await closeDb();
     }
-  });
+  // remote (Atlas) round-trips can brush the default 5s from a laptop — generous bound
+  }, 60_000);
 });
 
 describe("src/roads check (confidence gate + adapter seam)", () => {

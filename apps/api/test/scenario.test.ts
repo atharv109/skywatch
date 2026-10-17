@@ -158,5 +158,6 @@ describe.skipIf(!process.env.MONGODB_URI)("scenario replay against real Mongo", 
     const store = await deps.store(config);
     expect((await store.listHazards()).length).toBe(first.hazards);
     await closeDb();
-  });
+  // remote (Atlas) round-trips blow the default 5s when run from a laptop — generous bound
+  }, 60_000);
 });

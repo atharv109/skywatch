@@ -99,3 +99,7 @@ REPLAY=1 pinned in render.yaml; every secret var is `sync: false` (set in the da
 10. `TIGER_DATABASE_URL` either unset (no-op, no demo impact) or set with its table reachable; check-ins must never wait on it (fire-and-forget is verified by design).
 
 Note on `TOOL_SECRET`: when it is unset, the tool endpoints (`/tools/*`, `/verify/run`, `/roads/check`) accept **unauthenticated writes** — that is a demo-grade decision, the boot log warns about it, and it must be set before the API is exposed.
+### Verifying with real Mongo
+Gated tests use the MONGODB_URI (throwaway DB). Two rules:
+- Run `npx vitest run --no-file-parallelism` — the gated files share one DB by design and must not interleave.
+- If the network breaks TLS 1.3 (campus VPNs/proxies: 'tlsv1 alert internal error' or ENOTFOUND on the mongodb+srv seed), use the non-SRV string + `NODE_OPTIONS=--tls-max-v1.2` (both are in root `.env` locally; on Render the plain `mongodb+srv` string works).

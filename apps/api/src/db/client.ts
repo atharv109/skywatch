@@ -73,12 +73,19 @@ export async function ensureIndexes(db: Db): Promise<void> {
   ]);
   await db.collection(COLLECTIONS.hazards).createIndexes([
     { key: { geometry: "2dsphere" }, name: "geometry_2dsphere" },
+    // sourceId is the deterministic upsert key (idempotent replay). UNIQUE is the
+    // race guard: two concurrent upsert streams (seed-on-boot + a first replay, or
+    // two replays) with no unique index can both insert the same key on a slow
+    // round-trip; with it the upserts converge to one document.
+    { key: { sourceId: 1 }, name: "sourceId_1", unique: true },
   ]);
   await db.collection(COLLECTIONS.resources).createIndexes([
     { key: { loc: "2dsphere" }, name: "loc_2dsphere" },
+    { key: { sourceId: 1 }, name: "sourceId_1", unique: true },
   ]);
   await db.collection(COLLECTIONS.roads).createIndexes([
     { key: { loc: "2dsphere" }, name: "loc_2dsphere" },
+    { key: { cameraId: 1 }, name: "cameraId_1", unique: true },
   ]);
   await db.collection(COLLECTIONS.conversations).createIndexes([
     { key: { userId: 1 }, name: "userId_1" },
