@@ -89,8 +89,11 @@ export function normalizeSmokeFeatures(features: SmokeFeature[]): HazardDoc[] {
     const idx = seenByGroup.get(groupKey) ?? 0;
     seenByGroup.set(groupKey, idx + 1);
     const validFrom = start ? parseDoyTime(start) : Date.now();
+    // The live ArcGIS service names this field `End_` (trailing underscore); the converted
+    // fixture kept the KML's `End`. Read both (Task 2 review carry-over).
+    const endRaw = props.End ?? props.End_;
     const validTo =
-      typeof props.End === "string" ? Math.max(parseDoyTime(props.End), validFrom + 60 * 60 * 1000) : validFrom + 3 * 60 * 60 * 1000;
+      typeof endRaw === "string" ? Math.max(parseDoyTime(endRaw), validFrom + 60 * 60 * 1000) : validFrom + 3 * 60 * 60 * 1000;
     docs.push({
       sourceId: `hms-smoke:${satellite ?? ""}:${start ?? String(validFrom)}:${density ?? "Unknown"}:${idx}`,
       type: "smoke",
@@ -100,7 +103,7 @@ export function normalizeSmokeFeatures(features: SmokeFeature[]): HazardDoc[] {
       validFrom,
       validTo,
       source: "NOAA HMS Smoke Mapping",
-      extra: { density: density ?? null, satellite: satellite ?? null, start: start ?? null, end: props.End ?? null },
+      extra: { density: density ?? null, satellite: satellite ?? null, start: start ?? null, end: endRaw ?? null },
     });
   }
   return docs;

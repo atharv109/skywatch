@@ -141,6 +141,12 @@ describe("NOAA HMS smoke fetcher (injected fetch, live pagination)", () => {
     expect(new Set(docs.map((d) => d.sourceId)).size).toBe(3); // same-plume duplicates get distinct idx
     expect(normalizeSmokeFeatures([plume(1)])[0]?.sourceId).toBe(docs[0]?.sourceId); // deterministic
   });
+
+  it("reads the live ArcGIS End_ property (fixtures keep the KML's End; Task 2 review carry-over)", () => {
+    const doc = normalizeSmokeFeatures([plume(1)])[0];
+    expect(doc?.validTo).toBe(parseDoyTime("2020255 1610")); // from End_, not the +3h fallback
+    expect(doc?.extra?.["end"]).toBe("2020255 1610");
+  });
 });
 
 describe("USGS IV gauge fetcher (injected fetch)", () => {
