@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
-import { COLLECTIONS, NoMongoError, closeDb, ensureIndexes, getDb } from "../src/db/client.ts";
+import { COLLECTIONS, NoMongoError, closeDb, getDb } from "../src/db/client.ts";
 
 function indexInfo(indexes: { key: Record<string, string | number>; unique?: boolean }[]) {
   return indexes.map((i) => ({ key: i.key, unique: i.unique === true }));
@@ -13,10 +13,11 @@ describe("db client", () => {
 });
 
 // DB-touching smoke: runs only against a real Mongo when MONGODB_URI is set.
-describe.skipIf(!process.env.MONGODB_URI)("ensureIndexes (real Mongo)", () => {
-  it("creates the geospatial/unique indices on boot", async () => {
+describe.skipIf(!process.env.MONGODB_URI)("getDb wiring + ensureIndexes", () => {
+  // getDb itself is under test here: it must create the boot indexes on first
+  // connection, without any explicit ensureIndexes call from callers.
+  it("creates the geospatial/unique indices on first getDb()", async () => {
     const db = await getDb(loadConfig());
-    await ensureIndexes(db);
 
     const users = indexInfo(await db.collection(COLLECTIONS.users).indexes());
     expect(users).toContainEqual({ key: { loc: "2dsphere" }, unique: false });

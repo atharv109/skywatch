@@ -18,9 +18,9 @@ export const COLLECTIONS = {
 
 let client: MongoClient | null = null;
 let dbPromise: Promise<Db> | null = null;
+let ensured = false;
 
-/** Cached Mongo connection. Lazy: nothing calls this until a DB-backed route runs. */
-export function getDb(config: Pick<Config, "mongodbUri">): Promise<Db> {
+function connectDb(config: Pick<Config, "mongodbUri">): Promise<Db> {
   if (!client) {
     if (!config.mongodbUri) {
       dbPromise = null;
@@ -35,11 +35,32 @@ export function getDb(config: Pick<Config, "mongodbUri">): Promise<Db> {
   return dbPromise;
 }
 
+/**
+ * Cached Mongo connection. Lazy: nothing calls this until a DB-backed route runs,
+ * so boot never requires Mongo. Creates the indexes on the first successful
+ * connection: awaited by that first call, logged (not thrown) on failure, and
+ * retried by the next getDb() until it succeeds.
+ */
+export async function getDb(config: Pick<Config, "mongodbUri">): Promise<Db> {
+  const db = await connectDb(config);
+  if (!ensured) {
+    ensured = true;
+    try {
+      await ensureIndexes(db);
+    } catch (err) {
+      ensured = false;
+      console.error("ensureIndexes failed:", err);
+    }
+  }
+  return db;
+}
+
 export async function closeDb(): Promise<void> {
   if (client) {
     await client.close();
     client = null;
     dbPromise = null;
+    ensured = false;
   }
 }
 
