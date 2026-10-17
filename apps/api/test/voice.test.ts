@@ -174,7 +174,8 @@ describe("POST /webhooks/voice/post-call", () => {
 // ---------------------------------------------------------------------------
 // Fix round 2 (Task 7 final-review wave): the post-call summary text (demo
 // beat 6) — deterministic, lastBrief-composed, rate-limit exempt, consent-fenced.
-import { POST_CALL_SUMMARY_RATE_KEY, postCallSummary, type VoicePostCallPayload } from "../src/deliver/voice.ts";
+import { POST_CALL_SUMMARY_RATE_KEY, type VoicePostCallPayload } from "../src/deliver/voice.ts";
+import { postCallSummary } from "../src/deliver/post_call_summary.ts";
 import type { UserBrief } from "../src/types/brief.ts";
 
 const SUMMARY_BRIEF: UserBrief = {
@@ -198,21 +199,21 @@ const SUMMARY_BRIEF: UserBrief = {
 
 describe("post-call summary (demo beat 6)", () => {
   it("postCallSummary: composed only from brief fields; shelter when confident, else official-source nudge; link only when PUBLIC_BASE_URL set", () => {
-    const withLink = postCallSummary(SUMMARY_BRIEF, "mem-1", true, "https://skywatch.onrender.com");
+    const withLink = postCallSummary({ ...SUMMARY_BRIEF, lang: "en" }, "mem-1", true, "https://skywatch.onrender.com");
     expect(withLink).toContain("Smoke plume near Snoqualmie");
     expect(withLink).toContain("Close windows and stay indoors.");
     expect(withLink).toContain("Centro de la Raza is verified open");
     expect(withLink).toContain("https://skywatch.onrender.com/b/mem-1");
     expect(withLink).toContain("Call 911 if you are in danger.");
 
-    const noLink = postCallSummary(SUMMARY_BRIEF, "mem-1", false, "http://localhost:3000");
+    const noLink = postCallSummary({ ...SUMMARY_BRIEF, lang: "en" }, "mem-1", false, "http://localhost:3000");
     expect(noLink).not.toContain("/b/");
-    expect(postCallSummary(SUMMARY_BRIEF, "mem-1", true, "https://skywatch.onrender.com/")).toContain(
+    expect(postCallSummary({ ...SUMMARY_BRIEF, lang: "en" }, "mem-1", true, "https://skywatch.onrender.com/")).toContain(
       "https://skywatch.onrender.com/b/mem-1",
     );
 
     const unsure = postCallSummary(
-      { ...SUMMARY_BRIEF, shelter: { ...SUMMARY_BRIEF.shelter!, confidence: 0.4, status: "unknown" } },
+      { ...SUMMARY_BRIEF, lang: "en", shelter: { ...SUMMARY_BRIEF.shelter!, confidence: 0.4, status: "unknown" } },
       "mem-1",
       false,
       "http://localhost:3000",
@@ -270,9 +271,13 @@ describe("post-call summary (demo beat 6)", () => {
       expect(summaryRows).toHaveLength(1);
       expect(summaryRows[0]).toMatchObject({ userId: user.id, kind: "alert", status: "not_wired" });
       const summaryText = summaryRows[0]!.text;
+      // the user lang is "es": the summary renders the es skeleton (no English-only lines)
+      expect(summaryText).toContain("Seguimiento de Skywatch");
       expect(summaryText).toContain("Smoke plume near Snoqualmie");
       expect(summaryText).toContain(`https://skywatch.onrender.com/b/${user.id}`);
-      expect(summaryText).toContain("Call 911 if you are in danger.");
+      expect(summaryText).toContain("Llame al 911");
+      expect(summaryText).not.toContain("Skywatch follow-up");
+      expect(summaryText).not.toContain("Call 911 if you are in danger.");
       // privacy: never the phone number
       expect(summaryText).not.toContain(user.phone);
       expect((await h.dstore.listOutbox()).every((r) => !r.text.includes(user.phone))).toBe(true);
@@ -282,7 +287,7 @@ describe("post-call summary (demo beat 6)", () => {
     }
   });
 
-  it("STOPped user or revoked consent: no conversation note, no summary row", async () => {
+  it("STOPped or revoked consent: real behavior — revoked user still gets the conversation note but no summary send; STOPped user gets neither", async () => {
     const h = harness();
     const stopped = await h.dstore.createUser({
       phone: "+15551230002",
@@ -318,16 +323,97 @@ describe("post-call summary (demo beat 6)", () => {
       updatedAt: 0,
     });
 
-    for (const target of [stopped, revoked]) {
-      const payload: VoicePostCallPayload = structuredClone(OUTCOME_PAYLOAD);
-      payload.data!.user_id = target.id;
-      expect((await postCall(h.app, payload)).status).toBe(200);
-      await h.voice.drain();
-    }
-    const convos = await h.dstore.listConversations();
-    expect(convos.filter((e) => e.userId === stopped.id)).toHaveLength(0);
-    expect(convos.filter((e) => e.userId === revoked.id)).toHaveLength(0);
+    // DISTINCT conversation_id per iteration — same id would be queue-deduped
+    // before processing (the vacuous-test bug this fixes).
+    const stoppedPayload: VoicePostCallPayload = structuredClone(OUTCOME_PAYLOAD);
+    stoppedPayload.data!.user_id = stopped.id;
+    stoppedPayload.data!.conversation_id = "conv-stopped";
+    expect((await postCall(h.app, stoppedPayload)).status).toBe(200);
+    await h.voice.drain();
+    const revokedPayload: VoicePostCallPayload = structuredClone(OUTCOME_PAYLOAD);
+    revokedPayload.data!.user_id = revoked.id;
+    revokedPayload.data!.conversation_id = "conv-revoked";
+    expect((await postCall(h.app, revokedPayload)).status).toBe(200);
+    await h.voice.drain();
+
+    // STOPped: record deleted -> no routing, no note, no summary.
+    expect((await h.dstore.listConversations()).filter((e) => e.userId === stopped.id)).toHaveLength(0);
+    // revoked: consent fences ONLY the send — the outcome note still lands.
+    const revokedConvos = (await h.dstore.listConversations()).filter((e) => e.userId === revoked.id);
+    expect(revokedConvos).toHaveLength(1);
+    expect(revokedConvos[0]).toMatchObject({ from: "bot", text: "Voice check-in call (User reports power outage; household safe.)" });
+    // and neither has a summary outbox row (no post-call-summary send attempt)
     const summaries = (await h.dstore.listOutbox()).filter((r) => r.rateKey === POST_CALL_SUMMARY_RATE_KEY);
     expect(summaries).toHaveLength(0);
+    expect(
+      (await h.dstore.listOutbox()).filter((r) => r.userId === stopped.id || r.userId === revoked.id),
+    ).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix wave 3: the post-call summary is language-aware (per-language skeletons).
+import type { Lang } from "../src/types/brief.ts";
+
+const LANG_MARKERS: Array<[Lang, { present: RegExp[]; absent: RegExp[] }]> = [
+  ["en", { present: [/Skywatch follow-up: /, /is verified open/, /Call 911 if you are in danger\./], absent: [] }],
+  ["es",
+    {
+      present: [/Seguimiento de Skywatch: /, /Refugio .* verificado como abierto/, /Llame al 911/],
+      absent: [/is verified open/, /check official source/, /Skywatch follow-up/],
+    },
+  ],
+  [
+    "zh",
+    { present: [/Skywatch 跟进：/, /已核实为开放/, /如有危险，请拨打911。/], absent: [/is verified open/, /check official source/, /Skywatch follow-up/] },
+  ],
+  [
+    "tl",
+    { present: [/Update mula sa Skywatch: /, /Napatunayang bukas ang tuluyan/, /Tumawag sa 911/], absent: [/is verified open/, /check official source/] },
+  ],
+  [
+    "vi",
+    { present: [/Cập nhật từ Skywatch: /, /đã được xác nhận còn mở/, /Gọi 911/], absent: [/is verified open/, /check official source/] },
+  ],
+  [
+    "ar",
+    { present: [/تحديث من Skywatch/, /تم التأكد أن المأوى/, /اتصل بالرقم 911/], absent: [/is verified open/, /check official source/] },
+  ],
+];
+
+describe("post-call summary language awareness (fix wave 3)", () => {
+  it("table-driven: each brief.lang renders its skeleton markers; non-en never shows the English-only skeleton sentences", () => {
+    for (const [lang, { present, absent }] of LANG_MARKERS) {
+      const text = postCallSummary({ ...SUMMARY_BRIEF, lang }, "mem-1", false, "http://localhost:3000");
+      for (const re of present) expect(re.test(text)).toBe(true);
+      for (const re of absent) expect(re.test(text)).toBe(false);
+    }
+  });
+
+  it("non-en interpolates title and action verbatim (source-facts, not translations), link shape unchanged", () => {
+    const text = postCallSummary({ ...SUMMARY_BRIEF, lang: "es" }, "mem-1", true, "https://skywatch.onrender.com");
+    expect(text).toContain("Smoke plume near Snoqualmie");
+    expect(text).toContain("Close windows and stay indoors.");
+    expect(text).toContain("https://skywatch.onrender.com/b/mem-1");
+    // the brief's English EMERGENCY_LINE is NOT used outside en (translated row instead)
+    expect(text).not.toContain("Call 911 if you are in danger.");
+  });
+
+  it("es unsure shelter: the per-language check-official-source line, never the English one", () => {
+    const text = postCallSummary(
+      { ...SUMMARY_BRIEF, lang: "es", shelter: { ...SUMMARY_BRIEF.shelter!, confidence: 0.4, status: "unknown" } },
+      "mem-1",
+      false,
+      "http://localhost:3000",
+    );
+    expect(text).toContain("Consulte la fuente oficial para conocer el estado del refugio");
+    expect(text).not.toContain("check official source for shelter status");
+    expect(text).not.toContain("Refugio");
+  });
+
+  it("en summary is byte-identical to the pre-fix-wave output", () => {
+    expect(postCallSummary({ ...SUMMARY_BRIEF, lang: "en" }, "mem-1", true, "https://skywatch.onrender.com")).toBe(
+      "Skywatch follow-up: Smoke plume near Snoqualmie Close windows and stay indoors. Centro de la Raza is verified open https://skywatch.onrender.com/b/mem-1\nCall 911 if you are in danger.",
+    );
   });
 });

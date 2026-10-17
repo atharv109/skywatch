@@ -180,3 +180,40 @@ I1 (demo beat 6, voice.ts only — no store.ts/send.ts edits) + T3 minor (signup
 - **Verification:** typecheck clean; hermetic 160 pass / 5 skip (165 total);
   gated suite with MONGODB_URI on local mongod (throwaway db
   `skywatch-fixwave`, dropped after): 165/165, 16 files.
+
+---
+
+## Fix wave 3 (final, commit a013b93, not pushed)
+
+FIX 1 (language-aware post-call summary) + FIX 2 (de-vacuous STOP/revoked test); scope guard respected (voice.ts + its tests + the new summary module only).
+
+- **New module `apps/api/src/deliver/post_call_summary.ts`:** compact
+  per-language skeleton table (`head`/`headBare`/`shelterOpen`/`checkOfficial`/
+  `emergency` for en|es|zh|tl|vi|ar) in the brief/fallback.ts style — brief
+  fields (hazard title, actions[0].text) interpolated VERBATIM in every
+  language (source-facts, not translations); missing-row lookup falls back to
+  en. `postCallSummary` moved here; voice.ts imports it (same composition
+  flow, same rateKey marker, still deterministic/no network).
+- **Emergency reuse limit (documented, not silently duplicated):**
+  brief/build.ts fixes `emergency` to the English EMERGENCY_LINE for ALL
+  languages, so non-en summaries need a translated 911 line. The per-language
+  emergency strings were NOT importable (brief/fallback.ts exports only
+  fallbackRender; its TEMPLATES are module-private and editing it is outside
+  the file scope). They are therefore mirrored verbatim into
+  post_call_summary.ts with a DUPLICATION FLAG comment telling anyone who
+  corrects a line in fallback.ts to mirror it here — flagged in report
+  concerns.
+- **Tests (voice.test.ts):** table-driven marker test for all six languages
+  (present + negative assertions: non-en summaries contain NO English-only
+  skeleton sentence); verbatim title/action interpolation + no English
+  emergency line outside en; es unsure-shelter uses the es official-source
+  line; en output asserted byte-identical to the pre-fix-wave composition.
+- **FIX 2:** the STOPped-or-revoked test now uses ONE DISTINCT conversation_id
+  per iteration (the previous single shared id was queue-deduped before the
+  second iteration ever processed). Real behavior asserted: revoked-consent
+  user still gets the outcome conversation note (consent fences the SEND, not
+  the note) but zero outbox rows/summary attempts; STOPped user gets no note,
+  no rows, nothing.
+- **Verification:** tsc clean; hermetic 164 pass / 5 skip (169 total); gated
+  suite with MONGODB_URI on local mongod (throwaway db `skywatch-fixwave3`,
+  dropped after): 169/169, 16 files.

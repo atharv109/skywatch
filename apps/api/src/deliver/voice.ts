@@ -21,10 +21,10 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Config } from "../config.ts";
-import type { UserBrief } from "../types/brief.ts";
 import type { DeliverStore, UserRecord } from "./store.ts";
 import type { VerifyStore } from "../verify/store.ts";
 import { sendOutbound, type SendContext } from "./send.ts";
+import { postCallSummary } from "./post_call_summary.ts";
 
 export type VoiceVerifyResult = "ok" | "bad-signature" | "missing-header" | "stale-timestamp" | "no-secret";
 
@@ -98,34 +98,6 @@ export function outcomeFor(payload: VoicePostCallPayload): string | null {
  * interaction the user just had on the phone, not a new hazard push.
  */
 export const POST_CALL_SUMMARY_RATE_KEY = "post-call-summary";
-
-/** Map link: PUBLIC_BASE_URL/b/<userId> when PUBLIC_BASE_URL is set; unset = no link (config defaulting makes config.publicBaseUrl undistinguishable from unset). */
-function mapLink(publicBaseUrlSet: boolean, publicBaseUrl: string, userId: string): string | null {
-  if (!publicBaseUrlSet) return null;
-  return `${publicBaseUrl.replace(/\/+$/, "")}/b/${userId}`;
-}
-
-/** Deterministic post-call summary: hazard title + top action + verified shelter (confidence >= 0.5) else "check official source" + optional map link + the 911 line. */
-export function postCallSummary(
-  brief: UserBrief,
-  userId: string,
-  publicBaseUrlSet: boolean,
-  publicBaseUrl: string,
-): string {
-  const title = brief.hazards[0]?.title ?? null;
-  const topAction = brief.actions[0]?.text ?? null;
-  const shelter =
-    brief.shelter && brief.shelter.confidence >= 0.5 && brief.shelter.status === "open"
-      ? `${brief.shelter.name} is verified open`
-      : "check official source for shelter status";
-  const parts = [
-    title ? `Skywatch follow-up: ${title}` : "Skywatch follow-up",
-    topAction,
-    shelter,
-    mapLink(publicBaseUrlSet, publicBaseUrl, userId),
-  ].filter((part): part is string => part !== null);
-  return `${parts.join(" ")}\n${brief.emergency}`;
-}
 
 /**
  * Deterministic summary send (no Gemini): consent-checked, skipped when the
