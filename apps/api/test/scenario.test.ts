@@ -4,6 +4,9 @@ import { createApp } from "../src/server.ts";
 import { memoryStore, type AppStore } from "../src/store.ts";
 import { loadScenario, type LoadedScenario } from "../src/ingest/scenario.ts";
 import { stubInboundRuntime } from "../src/deliver/runtime.ts";
+import { emptyPipelineResult } from "../src/pipeline/run.ts";
+import { memoryMatchStore } from "../src/match/store.ts";
+import { memoryDeliverStore } from "../src/deliver/store.ts";
 import type { HazardDoc } from "../src/types/docs.ts";
 
 function depsWith(store: AppStore, pipelineCalls?: { count: number }) {
@@ -11,8 +14,11 @@ function depsWith(store: AppStore, pipelineCalls?: { count: number }) {
     store: async () => store,
     pipeline: async () => {
       if (pipelineCalls) pipelineCalls.count += 1;
+      return emptyPipelineResult();
     },
     inbound: stubInboundRuntime(),
+    match: async () => memoryMatchStore(store),
+    deliver: async () => memoryDeliverStore(),
   };
 }
 
@@ -112,8 +118,10 @@ describe("POST /scenario/:id/replay", () => {
       store: async () => {
         throw new Error("mongo down");
       },
-      pipeline: async () => undefined,
+      pipeline: async () => emptyPipelineResult(),
       inbound: stubInboundRuntime(),
+      match: async () => memoryMatchStore(memoryStore()),
+      deliver: async () => memoryDeliverStore(),
     });
     const res = await app.request("/scenario/smoke/replay", { method: "POST" });
     expect(res.status).toBe(503);

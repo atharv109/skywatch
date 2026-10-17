@@ -1,0 +1,76 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`assembleBrief (pure) > matches the types/brief.ts contract exactly (structural golden) 1`] = `
+{
+  "actions": [
+    {
+      "id": "close-windows",
+      "text": "Close windows and doors to keep outside air and smoke out.",
+    },
+    {
+      "id": "mask-if-outside",
+      "text": "If you go outside, wear an N95 or better mask.",
+    },
+    {
+      "id": "check-on-neighbors",
+      "text": "Check on neighbors by phone if they are at risk.",
+    },
+    {
+      "id": "run-air-filter",
+      "text": "Run an air filter or fan-filter setup if you have one.",
+    },
+    {
+      "id": "reduce-outdoor-activity",
+      "text": "Cut back on outdoor activity today.",
+    },
+  ],
+  "blockedRoads": [
+    {
+      "cameraId": "wsdot-9800",
+      "confidence": 0.79,
+      "name": "SR 99 demo",
+      "status": "flooded",
+    },
+    {
+      "cameraId": "wsdot-9999",
+      "confidence": 0.79,
+      "name": "Far Road",
+      "status": "flooded",
+    },
+  ],
+  "emergency": "Call 911 if you are in danger.",
+  "hazards": [
+    {
+      "severity": 3,
+      "timing": "now through tonight",
+      "title": "Smoke plume (heavy) — test 3",
+      "type": "smoke",
+      "validFrom": 1792281600000,
+      "validTo": 1792328400000,
+    },
+    {
+      "severity": 1,
+      "timing": "now through tonight",
+      "title": "Smoke plume (heavy) — test 1",
+      "type": "smoke",
+      "validFrom": 1792281600000,
+      "validTo": 1792328400000,
+    },
+  ],
+  "lang": "en",
+  "officialSource": {
+    "name": "NWS / NOAA HMS Fire and Smoke Map",
+    "url": "https://fire.airnow.gov",
+  },
+  "shelter": {
+    "confidence": 0.79,
+    "distanceKm": 1.2,
+    "hours": "24/7",
+    "id": "seed-shelter-1",
+    "name": "Test Shelter",
+    "status": "open",
+    "verifiedMinutesAgo": 10,
+  },
+  "userId": "u-1",
+}
+`;

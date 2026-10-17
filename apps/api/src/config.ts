@@ -13,6 +13,8 @@ export interface Config {
   elevenlabsAgentIdBrief: string | null;
   elevenlabsAgentIdCheckin: string | null;
   elevenlabsVoiceWebhookSecret: string | null;
+  /** Optional shared secret for /tools/brief endpoints (Task 4); unset = unauthenticated, demo-grade. */
+  toolSecret: string | null;
   publicBaseUrl: string;
   replay: boolean;
   port: number;
@@ -51,6 +53,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     elevenlabsAgentIdBrief: secret(env, "ELEVENLABS_AGENT_ID_BRIEF"),
     elevenlabsAgentIdCheckin: secret(env, "ELEVENLABS_AGENT_ID_CHECKIN"),
     elevenlabsVoiceWebhookSecret: secret(env, "ELEVENLABS_VOICE_WEBHOOK_SECRET"),
+    toolSecret: secret(env, "TOOL_SECRET"),
     publicBaseUrl: secret(env, "PUBLIC_BASE_URL") ?? `http://localhost:${env["PORT"] ?? "3000"}`,
     replay: parseReplay(env["REPLAY"] ?? "0"),
     port: parsePort(env["PORT"] ?? "3000"),

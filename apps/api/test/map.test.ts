@@ -6,6 +6,13 @@ import { memoryStore } from "../src/store.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import { seedScenarioBase } from "../src/ingest/scenario.ts";
 import { stubInboundRuntime } from "../src/deliver/runtime.ts";
+import { emptyPipelineResult } from "../src/pipeline/run.ts";
+import { memoryMatchStore } from "../src/match/store.ts";
+import { memoryDeliverStore } from "../src/deliver/store.ts";
+
+/** AppDeps requires match/deliver now (Task 4); these tests never touch them. */
+const emptyMatchStore = () => memoryMatchStore(memoryStore());
+const throwAwayDeliverStore = () => memoryDeliverStore();
 
 const NOW = Date.UTC(2026, 9, 17, 20, 0);
 
@@ -122,8 +129,10 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
     await store.upsertHazard(hazardDoc(0));
     return createApp(loadConfig({}), {
       store: async () => store,
-      pipeline: async () => undefined,
+      pipeline: async () => emptyPipelineResult(),
       inbound: stubInboundRuntime(),
+      match: async () => emptyMatchStore(),
+      deliver: async () => throwAwayDeliverStore(),
     });
   }
 
@@ -144,8 +153,10 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
       store: async () => {
         throw new Error("mongo down");
       },
-      pipeline: async () => undefined,
+      pipeline: async () => emptyPipelineResult(),
       inbound: stubInboundRuntime(),
+      match: async () => emptyMatchStore(),
+      deliver: async () => throwAwayDeliverStore(),
     });
     const res = await app.request("/map/state");
     expect(res.status).toBe(503);

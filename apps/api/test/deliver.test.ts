@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
 import { createApp } from "../src/server.ts";
 import { memoryStore } from "../src/store.ts";
+import { memoryMatchStore } from "../src/match/store.ts";
+import { emptyPipelineResult } from "../src/pipeline/run.ts";
 import { memoryDeliverStore, type DeliverStore, type UserRecord } from "../src/deliver/store.ts";
 import { createInboundRuntime, type InboundRuntime } from "../src/deliver/runtime.ts";
 import { deliverAlert, isAlertBlocked, ALERT_WINDOW_MS, type SendContext } from "../src/deliver/send.ts";
@@ -53,7 +55,13 @@ function makeHarness(geocode?: (address: string) => Promise<GeocodeResult | null
       }),
   };
   const inbound = createInboundRuntime(ctx);
-  const app = createApp(config, { store: async () => memoryStore(), pipeline: async () => undefined, inbound });
+  const app = createApp(config, {
+    store: async () => memoryStore(),
+    pipeline: async () => emptyPipelineResult(),
+    inbound,
+    match: async () => memoryMatchStore(memoryStore()),
+    deliver: async () => dstore,
+  });
   const post: Harness["post"] = async (payload, opts = {}) => {
     const raw = JSON.stringify(payload);
     const ts = opts.timestamp !== undefined ? Number(opts.timestamp) : Math.floor(Date.now() / 1000);

@@ -84,6 +84,11 @@ export interface DeliverStore {
   appendOutbox(record: OutboxRecord): Promise<void>;
   /** Newest alert outbox row for userId+rateKey with createdAt >= since (rate gate lookup). */
   lastOutboxAlert(userId: string, rateKey: string, since: number): Promise<OutboxRecord | null>;
+  /**
+   * Users the match pipeline briefs: active signup state, consent granted (both
+   * flags), and a resolved location. Task 4 pipeline + per-user brief matching.
+   */
+  listBriefableUsers(): Promise<UserRecord[]>;
   // read access for tests / Task 5-6 dashboards:
   listOutbox(): Promise<OutboxRecord[]>;
   listConversations(): Promise<ConversationEntry[]>;
@@ -197,6 +202,12 @@ export function mongoDeliverStore(db: Db): DeliverStore {
         at: Number(doc["at"]),
       }));
     },
+    async listBriefableUsers() {
+      const docs = await users
+        .find({ state: "active", consentText: true, consentVoice: true, loc: { $exists: true, $ne: null } })
+        .toArray();
+      return docs.map(docToUser);
+    },
   };
 }
 
@@ -246,6 +257,9 @@ export function memoryDeliverStore(): DeliverStore {
     },
     async listConversations() {
       return [...convos];
+    },
+    async listBriefableUsers() {
+      return [...users.values()].filter((u) => u.state === "active" && u.consentText && u.consentVoice && u.loc !== null);
     },
   };
 }

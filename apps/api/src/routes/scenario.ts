@@ -19,8 +19,8 @@ export function scenarioRoutes(config: Config, deps: AppDeps): Hono {
     try {
       const store = await deps.store(config);
       const loaded = await loadScenario(store, id);
-      await deps.pipeline({ config, store });
-      return c.json({ ok: true, ...loaded, pipelineRan: true });
+      const pipeline = await deps.pipeline({ config, store, match: deps.match, deliver: deps.deliver });
+      return c.json({ ok: true, ...loaded, pipelineRan: true, pipeline });
     } catch (err) {
       console.error(`replay '${id}' failed:`, err);
       return c.json({ error: err instanceof Error ? err.message : "replay failed" }, 503);
