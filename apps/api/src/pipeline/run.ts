@@ -1,16 +1,18 @@
 import type { Config, } from "../config.ts";
 import type { AppStore } from "../store.ts";
-import type { DeliverStore, UserRecord } from "../deliver/store.ts";
 import { deliverAlert, type AlertOutcome, type SendContext } from "../deliver/send.ts";
+import type { DeliverStore, OutboxMeta, UserRecord } from "../deliver/store.ts";
 import type { MatchStore } from "../match/store.ts";
 import { buildUserBrief } from "../brief/build.ts";
-import type { UserBrief } from "../types/brief.ts";
+import { renderAlert } from "../brief/render.ts";
 
 /**
  * The Task 4 pipeline (the stub Task 2 left at the seam): after a scenario replay
  * loads hazards, for every consenting, located user — match active hazards -> build
- * the locked brief -> deliver one alert through the existing consent + rate gates
- * (deliverAlert). Deliveries never bypass the deliver path; Global Constraint 3.
+ * the locked brief -> render the alert text (Task 5: Gemini renderer, with the
+ * deterministic brief-fields join when Gemini is unset / REPLAY=1) -> deliver
+ * through the existing consent + rate gates (deliverAlert). Deliveries never
+ * bypass the deliver path; Global Constraint 3.
  *
  * One alert per user per pipeline cycle: rate key = the worst active hazard's
  * sourceId (a user inside several smoke plumes plus an alert gets a single message
@@ -18,12 +20,11 @@ import type { UserBrief } from "../types/brief.ts";
  * the same hazard is suppressed by the gate.
  *
  * A single user failing never fails the cycle: the user is skipped and the error is
- * logged without any user-identifying data. Task 5 replaces alertText with the Gemini
- * renderer — the gates and this shape stay.
+ * logged without any user-identifying data.
  */
 
 export interface PipelineCtx {
-  config: Pick<Config, "photonProjectId" | "photonProjectSecret">;
+  config: Pick<Config, "photonProjectId" | "photonProjectSecret" | "geminiApiKey" | "replay">;
   store: AppStore;
   match: () => Promise<MatchStore>;
   deliver: () => Promise<DeliverStore>;
@@ -39,21 +40,6 @@ export interface PipelineResult {
 /** Convenience for test stubs that install a no-op pipeline. */
 export function emptyPipelineResult(): PipelineResult {
   return { briefedUsers: 0, alerts: { sent: 0, not_wired: 0, failed: 0, rate_limited: 0, consent_hold: 0 } };
-}
-
-/**
- * Deliver-time fallback text, built ONLY from brief fields so the safety rule
- * (never name a place/road/number that is not in the brief) holds on the alert path
- * before the renderer lands in Task 5.
- */
-function alertText(brief: UserBrief): string {
-  const lines: string[] = [];
-  const worst = brief.hazards[0];
-  if (worst) lines.push(`${worst.title} — ${worst.timing}.`);
-  for (const action of brief.actions.slice(0, 2)) lines.push(action.text);
-  if (brief.shelter) lines.push(`Open shelter: ${brief.shelter.name}, about ${brief.shelter.distanceKm} km away.`);
-  lines.push(brief.emergency);
-  return lines.join(" ");
 }
 
 export async function runPipeline(ctx: PipelineCtx): Promise<PipelineResult> {
@@ -77,7 +63,11 @@ export async function runPipeline(ctx: PipelineCtx): Promise<PipelineResult> {
         spaceId: user.spaceId,
         platform: user.platform,
       };
-      const outcome = await deliverAlert(send, briefable, worst.sourceId, alertText(brief));
+      // The brief is built inside the deliver loop (fresh at send time by
+      // construction); the renderer only sees brief fields, never raw feed docs.
+      const rendered = await renderAlert({ brief, config: ctx.config });
+      const meta: OutboxMeta = { lang: brief.lang, source: rendered.source, brief };
+      const outcome = await deliverAlert(send, briefable, worst.sourceId, rendered.text, meta);
       alerts[outcome] += 1;
     } catch (err) {
       // No user identifiers here, ever.

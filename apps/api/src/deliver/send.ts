@@ -5,7 +5,7 @@
  */
 import type { Config } from "../config.ts";
 import { NotWiredError, toPhoton } from "./photon.ts";
-import type { DeliverStore, OutboxKind, OutboxRecord, OutboxStatus, UserRecord } from "./store.ts";
+import type { DeliverStore, OutboxKind, OutboxMeta, OutboxRecord, OutboxStatus, UserRecord } from "./store.ts";
 
 export interface SendContext {
   config: Pick<Config, "photonProjectId" | "photonProjectSecret">;
@@ -25,6 +25,7 @@ export async function sendOutbound(
   text: string,
   kind: OutboxKind = "reply",
   rateKey: string | null = null,
+  meta?: OutboxMeta,
 ): Promise<OutboxStatus> {
   const store = await ctx.store();
   const now = ctx.now();
@@ -37,6 +38,7 @@ export async function sendOutbound(
     text,
     status: "failed",
     error: null,
+    meta,
     createdAt: now,
     sentAt: null,
   };
@@ -84,6 +86,7 @@ export async function deliverAlert(
   user: Pick<UserRecord, "id" | "spaceId" | "platform">,
   rateKey: string,
   text: string,
+  meta?: OutboxMeta,
 ): Promise<AlertOutcome> {
   const store = await ctx.store();
   const now = ctx.now();
@@ -101,6 +104,7 @@ export async function deliverAlert(
       text,
       status: "consent_hold",
       error: "consent not granted (text+voice must both be true; missing/revoked user record); nothing sent",
+      meta,
       createdAt: now,
       sentAt: null,
     });
@@ -118,10 +122,11 @@ export async function deliverAlert(
       text,
       status: "rate_limited",
       error: "rate limited: max 1 alert per user per hazard per 2 h",
+      meta,
       createdAt: now,
       sentAt: null,
     });
     return "rate_limited";
   }
-  return sendOutbound(ctx, user, text, "alert", rateKey);
+  return sendOutbound(ctx, user, text, "alert", rateKey, meta);
 }

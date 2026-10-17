@@ -1,6 +1,6 @@
 import type { Db } from "mongodb";
 import { ObjectId } from "mongodb";
-import type { Lang } from "../types/brief.ts";
+import type { Lang, UserBrief } from "../types/brief.ts";
 import type { Point } from "../types/docs.ts";
 import { COLLECTIONS } from "../db/client.ts";
 
@@ -49,6 +49,17 @@ export type OutboxKind = "reply" | "alert";
 export type OutboxStatus = "sent" | "not_wired" | "failed" | "rate_limited" | "consent_hold";
 
 /**
+ * Alert rendering provenance (Task 5): the exact brief the text was rendered from,
+ * the user language, and how the text was produced. Written on `kind: "alert"`
+ * rows so the demo can show what the model saw vs what was delivered.
+ */
+export interface OutboxMeta {
+  lang: Lang;
+  source: "gemini" | "brief-fallback";
+  brief: UserBrief;
+}
+
+/**
  * Every outbound passes through here (Global Constraint 3). The rate-limit gate
  * (send.ts) reads back `kind: "alert"` rows by userId + rateKey.
  */
@@ -63,6 +74,8 @@ export interface OutboxRecord {
   status: OutboxStatus;
   /** Only set for failed attempts (NotWiredError message / SDK error). */
   error: string | null;
+  /** Task 5: rendered-alert provenance (alert rows only). */
+  meta?: OutboxMeta | undefined;
   createdAt: number;
   sentAt: number | null;
 }
@@ -128,6 +141,7 @@ function docToRecord(doc: Record<string, unknown>): OutboxRecord {
     text: String(doc["text"]),
     status: doc["status"] as OutboxStatus,
     error: (doc["error"] ?? null) as string | null,
+    meta: (doc["meta"] ?? undefined) as OutboxMeta | undefined,
     createdAt: Number(doc["createdAt"]),
     sentAt: (doc["sentAt"] ?? null) as number | null,
   };
