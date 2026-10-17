@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Ops Board — Skywatch</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#121722; --panel2:#171d2b; --border:#232b3b;
+  --text:#dbe4f0; --dim:#8a97ab; --accent:#4ea1ff;
+  --ok:#30d57f; --okbg:rgba(48,213,127,.14);
+  --warn:#ffb020; --warnbg:rgba(255,176,32,.14);
+  --bad:#ff5a5f; --badbg:rgba(255,90,95,.14);
+  --gray:#8a97ab; --graybg:rgba(138,151,171,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:0 0 2px}
+.subhead{color:var(--dim);font-size:13px;margin:0 0 14px}
+a{color:var(--accent);text-decoration:none}
+.grid{display:grid;grid-template-columns:1fr 340px;gap:12px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.panel h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid var(--border)}
+.chip.ok{background:var(--okbg);color:var(--ok);border-color:rgba(48,213,127,.4)}
+.chip.warn{background:var(--warnbg);color:var(--warn);border-color:rgba(255,176,32,.4)}
+.chip.bad{background:var(--badbg);color:var(--bad);border-color:rgba(255,90,95,.4)}
+.chip.gray{background:var(--graybg);color:var(--gray);border-color:rgba(138,151,171,.4)}
+.chip.part{background:rgba(78,161,255,.12);color:var(--accent);border-color:rgba(78,161,255,.4)}
+.bar{display:inline-block;height:6px;border-radius:3px;background:var(--graybg);vertical-align:middle;width:70px;position:relative;overflow:hidden}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--dim);font-weight:600;text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--border)}
+td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+input,select,button{font:inherit;color:var(--text)}
+input[type=text],input[type=password],select{background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:7px 9px;font-size:13px}
+button{background:#1d2740;border:1px solid #2d3a58;border-radius:7px;padding:7px 13px;font-size:13px;cursor:pointer}
+button:hover{background:#24304f}
+button.primary{background:var(--accent);border-color:var(--accent);color:#06122a;font-weight:600}
+button.warnb{background:#4a3a12;border-color:#6b5218;color:var(--warn)}
+button.dangerb{background:#4a181c;border-color:#6b2026;color:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;color:var(--dim)}
+.stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;min-width:100px}
+.stat b{display:block;font-size:20px;color:var(--text)}
+.stat span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+.statrow{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+details{margin:4px 0}
+summary{cursor:pointer;color:var(--accent);font-size:12.5px}
+.logline{padding:5px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--border);margin-bottom:6px;font-size:12.5px}
+.haz{border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:8px;background:var(--panel2)}
+.haz .sev{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;margin-right:7px}
+.sev1{background:var(--graybg);color:var(--gray)}
+.sev2{background:var(--warnbg);color:var(--warn)}
+.sev3{background:rgba(255,120,32,.16);color:#ff8a3c}
+.sev4{background:var(--badbg);color:var(--bad)}
+.dim{color:var(--dim)}
+label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
+.msgline{padding:3px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Skywatch operator board</h1>
+  <p class="subhead">Live MapState + verify tools + scenario replay. <a href="/">harness index</a></p>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:8px">
+      <span class="chip gray" id="mode">connecting…</span>
+      <span class="chip gray" id="generated"></span>
+      <span class="chip gray" id="auth"></span>
+    </div>
+    <div class="row">
+      <label style="margin:0;flex:1;min-width:220px">API base
+        <input type="text" id="cfgApi" style="width:100%" placeholder="(same origin)">
+      </label>
+      <label style="margin:0;flex:1;min-width:220px">TOOL_SECRET
+        <input type="password" id="cfgSecret" style="width:100%" placeholder="(blank when unset)">
+      </label>
+      <button id="cfgSave" style="align-self:flex-end">Save config</button>
+    </div>
+  </div>
+
+  <div class="statrow">
+    <div class="stat"><b id="sHaz">–</b><span>hazards</span></div>
+    <div class="stat"><b id="sRes">–</b><span>resources</span></div>
+    <div class="stat"><b id="sRoads">–</b><span>roads</span></div>
+    <div class="stat"><b id="sDots">–</b><span>user dots</span></div>
+    <div class="stat"><b id="sBrief">–</b><span>briefs / users</span></div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <h2>Active hazards</h2>
+        <div id="hazards"><p class="dim">no data yet</p></div>
+      </div>
+
+      <div class="panel">
+        <h2>Resources (pick a row below for manual verify)</h2>
+        <div style="overflow:auto"><table id="resTable"></table></div>
+      </div>
+
+      <div class="panel">
+        <h2>Road cameras</h2>
+        <div style="overflow:auto"><table id="roadTable"></table></div>
+      </div>
+
+      <div class="panel" id="darkZonePanel">
+        <h2>Dark-zone layer (data.mesh)</h2>
+        <p class="dim" id="meshEmpty">No mesh section in MapState — no packets synced yet (see mesh-sim.html).</p>
+        <div id="meshBody" style="display:none"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Manual verify (check-in)</h2>
+        <label>Select resource</label>
+        <select id="vres" style="width:100%"></select>
+        <label>Status verdict</label>
+        <div class="row">
+          <button class="primary" data-status="open">open</button>
+          <button class="warnb" data-status="full">full</button>
+          <button class="dangerb" data-status="closed">closed</button>
+          <button data-status="unknown">unknown</button>
+        </div>
+        <p class="dim" style="margin:8px 0 0;font-size:12px">POST /tools/checkin {resourceId, status, manual:true} — the resource chip above should change within ~2 s as MapState refreshes.</p>
+        <div id="vresp" class="mono" style="margin-top:8px;white-space:pre-wrap"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Verify run</h2>
+        <p class="dim" style="font-size:12px;margin:0 0 8px">POST /verify/run — enqueue voice check-in requests for partner resources inside active hazards.</p>
+        <button id="verifyRun">Run verify</button>
+        <div id="vrun" style="margin-top:10px"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Scenario replay</h2>
+        <div class="row">
+          <button id="replaySmoke">Replay smoke</button>
+          <button id="replayFlood">Replay flood</button>
+        </div>
+        <div id="replayOut" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  // ---- config (persisted; ?api= overrides once) -----------------------------
+  var cfg = { api: "", toolSecret: "" };
+  try { cfg = { api: "", toolSecret: "" }; var s = JSON.parse(localStorage.getItem("skywatch.cfg") || "{}"); if (s.api) cfg.api = s.api; if (s.toolSecret) cfg.toolSecret = s.toolSecret; } catch (e) {}
+  var params = new URLSearchParams(location.search);
+  if (params.get("api")) cfg.api = params.get("api");
+  if (params.get("toolSecret")) cfg.toolSecret = params.get("toolSecret");
+  var $ = function (id) { return document.getElementById(id); };
+  var apiBase = function () { return (cfg.api || "").replace(/\/+$/, ""); };
+  function saveCfg() {
+    cfg.api = $("cfgApi").value.trim();
+    cfg.toolSecret = $("cfgSecret").value;
+    try { localStorage.setItem("skywatch.cfg", JSON.stringify(cfg)); } catch (e) {}
+    $("auth").textContent = cfg.toolSecret ? "TOOL_SECRET set" : "TOOL_SECRET blank";
+    reconnect();
+  }
+  $("cfgApi").value = cfg.api;
+  $("cfgSecret").value = cfg.toolSecret;
+  $("cfgSave").addEventListener("click", saveCfg);
+  $("auth").textContent = cfg.toolSecret ? "TOOL_SECRET set" : "TOOL_SECRET blank";
+
+  function url(p) { return apiBase() + p; }
+  function esc(v) { return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function time(t) { if (!t) return "–"; var d = new Date(t); return t >= 1e12 ? d.toLocaleTimeString() : d.toLocaleString(); }
+  function toolHeaders() {
+    var h = { "Content-Type": "application/json" };
+    if (cfg.toolSecret) { h["Authorization"] = "Bearer " + cfg.toolSecret; h["X-Skywatch-Tool-Secret"] = cfg.toolSecret; }
+    return h;
+  }
+  function postJson(p, body) {
+    return fetch(url(p), { method: "POST", headers: toolHeaders(), body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json().then(function (j) { j.__status = r.status; return j; }); });
+  }
+
+  // ---- state refresh: SSE first, polling fallback ---------------------------
+  var mode = "idle", es = null, timer = null, lastState = null;
+  function setMode(m) { mode = m; $("mode").className = "chip " + (m === "sse" ? "ok" : m === "poll" ? "warn" : "gray");
+    $("mode").textContent = m === "sse" ? "live (SSE)" : m === "poll" ? "polling (2s)" : "connecting…"; }
+  function handleState(text) {
+    var st = JSON.parse(text);
+    lastState = st;
+    $("generated").textContent = "generated " + new Date(st.generatedAt).toLocaleTimeString();
+    render(st);
+  }
+  function pollOnce() {
+    fetch(url("/map/state")).then(function (r) { return r.json(); }).then(handleState)
+      .catch(function (err) { $("mode").className = "chip bad"; $("mode").textContent = "API unreachable"; });
+  }
+  function reconnect() {
+    if (es) { es.close(); es = null; }
+    if (timer) { clearInterval(timer); timer = null; }
+    setMode("idle");
+    try {
+      es = new EventSource(url("/map/stream"));
+      es.addEventListener("state", function (e) { setMode("sse"); try { handleState(e.data); } catch (err) {} });
+      es.onerror = function () { es.close(); es = null; setMode("poll"); timer = setInterval(pollOnce, 2000); };
+    } catch (e) { setMode("poll"); timer = setInterval(pollOnce, 2000); }
+    pollOnce();
+  }
+
+  // ---- rendering ------------------------------------------------------------
+  var STATUS_CHIP = { open: "ok", full: "warn", closed: "bad", unknown: "gray" };
+  function statusChip(st) { return '<span class="chip ' + (STATUS_CHIP[st] || "gray") + '">' + esc(st) + "</span>"; }
+  function bar(c) { var pct = Math.max(0, Math.min(1, c || 0)) * 100; return '<span class="bar"><i style="width:' + pct.toFixed(0) + '%"></i></span>'; }
+
+  function render(st) {
+    $("sHaz").textContent = st.hazards.length;
+    $("sRes").textContent = st.resources.length;
+    $("sRoads").textContent = st.roads.length;
+    $("sDots").textContent = st.userDots.length;
+    $("sBrief").textContent = st.briefCount;
+
+    var hz = (st.hazards || []).map(function (h) {
+      return '<div class="haz"><span class="sev sev' + esc(h.severity) + '">S' + esc(h.severity) + "</span><b>" + esc(h.title) +
+        '</b><div class="dim" style="font-size:12px">' + esc(h.type) + " · valid " + time(h.validFrom) + " → " + time(h.validTo) +
+        " · " + esc(h.source) + " · " + esc(h.sourceId) + "</div></div>";
+    }).join("");
+    $("hazards").innerHTML = hz || '<p class="dim">no active hazards — replay smoke or flood on the right</p>';
+
+    var sel = $("vres").value;
+    $("resTable").innerHTML = "<tr><th>Name</th><th>Kind</th><th>Status</th><th>Conf</th><th>Partner</th><th>sourceId</th></tr>" +
+      (st.resources || []).map(function (r) {
+        return "<tr><td>" + esc(r.name) + "</td><td class='dim'>" + esc(r.kind) + "</td><td>" + statusChip(r.status) + "</td><td>" + bar(r.confidence) + " <span class='mono'>" + r.confidence.toFixed(2) + "</td><td>" + (r.partner ? '<span class="chip part">partner</span>' : '<span class="dim">—</span>') + "</td><td class='mono'>" + esc(r.sourceId) + "</td></tr>";
+      }).join("");
+    var opts = (st.resources || []).map(function (r) {
+      return '<option value="' + esc(r.sourceId) + '"' + (r.sourceId === sel ? " selected" : "") + ">" + esc(r.name) + " (" + esc(r.kind) + ")</option>";
+    }).join("");
+    $("vres").innerHTML = opts || "<option value=''>— replay a scenario first —</option>";
+
+    $("roadTable").innerHTML = "<tr><th>Name</th><th>Status</th><th>Conf</th><th>cameraId</th></tr>" +
+      (st.roads || []).map(function (r) {
+        return "<tr><td>" + esc(r.name) + "</td><td>" + statusChip(r.status) + "</td><td>" + bar(r.confidence) + "</td><td class='mono'>" + esc(r.cameraId) + "</td></tr>";
+      }).join("") || '<tr><td class="dim">none</td></tr>';
+
+    renderMesh(st.mesh);
+  }
+
+  function renderMesh(mesh) {
+    if (!mesh) { $("meshBody").style.display = "none"; $("meshEmpty").style.display = "block"; return; }
+    $("meshEmpty").style.display = "none";
+    $("meshBody").style.display = "block";
+    var out = '<div class="row" style="margin-bottom:10px">' +
+      '<div class="stat"><b>' + mesh.counts.packets + "</b><span>packets</span></div>" +
+      '<div class="stat"><b>' + mesh.counts.beacons + "</b><span>beacon clusters</span></div>" +
+      '<div class="stat"><b>' + mesh.coverage.length + "</b><span>coverage devices</span></div>" +
+      '<div class="stat"><b>' + mesh.counts.acked + "</b><span>acked</span></div>" +
+      '<div class="stat"><b>' + mesh.messages.length + "</b><span>msgs (50 max)</span></div></div>";
+
+    out += "<h3 style='font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px'>Rescue beacons (priority &gt; lastSeen)</h3>";
+    out += mesh.beacons.length
+      ? mesh.beacons.map(function (b) {
+          return '<div class="haz"><b>' + esc(b.kind) + "</b> <span class='chip gray'>P" + esc(b.priority) + "</span> <span class='chip gray'>score " + esc(b.score) + "</span>" +
+            "<div class='dim' style='font-size:12px'>" + esc(b.reports) + " report(s) · " + b.lat.toFixed(4) + ", " + b.lon.toFixed(4) + " · last " + time(b.lastSeen) +
+            (b.ackedAt ? " · acked" : "") + "</div></div>";
+        }).join("")
+      : '<p class="dim">none</p>';
+
+    out += "<h3 style='font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px'>Hazard reports (30-min decay)</h3>";
+    out += mesh.hazardReports.length
+      ? mesh.hazardReports.slice(0, 20).map(function (h) {
+          var chipCls = h.verify === "ok" ? "ok" : h.verify === "unsigned" ? "warn" : "bad";
+          return '<div class="haz"><b>' + esc(h.status) + "</b> <span class='chip " + chipCls + "'>" + esc(h.verify) + "</span> " +
+            "<span class='chip gray'>score " + (h.score === null ? "–" : esc(h.score)) + "</span>" +
+            "<div class='dim' style='font-size:12px'>" + h.lat.toFixed(4) + ", " + h.lon.toFixed(4) + " · " + time(h.ts) + "</div>" +
+            (h.reasons && h.reasons.length ? "<details><summary>reasons</summary><ul class='mono'>" + h.reasons.map(function (z) { return "<li>" + esc(z) + "</li>"; }).join("") + "</ul></details>" : "") +
+            "</div>";
+        }).join("")
+      : '<p class="dim">none</p>';
+
+    if (mesh.messages && mesh.messages.length) {
+      out += "<h3 style='font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px'>Mesh chat</h3>" +
+        mesh.messages.map(function (m) {
+          return '<div class="msgline"><span class="mono">' + esc(m.from) + (m.to ? " → " + esc(m.to) : " → mesh") + '</span> "' + esc(m.text) + '"</div>';
+        }).join("");
+    }
+    $("meshBody").innerHTML = out;
+  }
+
+  // ---- actions --------------------------------------------------------------
+  document.querySelectorAll('button[data-status]').forEach(function (b) {
+    b.addEventListener("click", function () {
+      var rid = $("vres").value;
+      if (!rid) { $("vresp").textContent = "pick a resource first (replay a scenario to seed them)"; return; }
+      $("vresp").textContent = "POSTing " + b.getAttribute("data-status") + " for " + rid + " …";
+      postJson("/tools/checkin", { resourceId: rid, status: b.getAttribute("data-status"), manual: true })
+        .then(function (j) {
+          $("vresp").textContent = j.__status + " " + JSON.stringify(j);
+          if (j.ok) setTimeout(pollOnce, 400); // pin/confidence updates on the next MapState tick (~2s)
+        })
+        .catch(function (err) { $("vresp").textContent = "fetch failed: " + err; });
+    });
+  });
+
+  $("verifyRun").addEventListener("click", function () {
+    $("vrun").innerHTML = '<p class="dim">running…</p>';
+    postJson("/verify/run", {})
+      .then(function (j) {
+        if (!j.ok) { $("vrun").innerHTML = '<div class="logline">✗ ' + esc(JSON.stringify(j)) + "</div>"; return; }
+        $("vrun").innerHTML = '<p class="dim">' + (j.created || []).length + " request(s) created</p>" +
+          (j.created || []).map(function (r) {
+            return '<div class="logline mono"><b>' + esc(r.resourceName) + "</b> — " + esc(r.hazardSourceId) + "<br>" + esc(r.requestId) + " · " + esc(r.status) + "</div>";
+          }).join("") || '<p class="dim">0 requests (no partner resources inside active hazards)</p>';
+      })
+      .catch(function (err) { $("vrun").innerHTML = '<div class="logline">fetch failed: ' + esc(String(err)) + "</div>"; });
+  });
+
+  function doReplay(id) {
+    $("replayOut").innerHTML = '<p class="dim">replaying ' + id + "…</p>";
+    postJson("/scenario/" + id + "/replay", {})
+      .then(function (j) {
+        if (!j.ok) { $("replayOut").innerHTML = '<div class="logline">✗ ' + esc(JSON.stringify(j)) + "</div>"; return; }
+        var p = j.pipeline || { briefedUsers: 0, alerts: {} };
+        var alerts = p.alerts || {};
+        $("replayOut").innerHTML = '<div class="logline"><b>' + esc(j.scenario) + "</b> loaded: " +
+          j.hazards + " hazards · " + j.resources + " resources · " + j.roads + " roads</div>" +
+          '<div class="logline">pipeline: <b>' + p.briefedUsers + "</b> briefed users · " +
+          ["sent", "not_wired", "rate_limited", "consent_hold", "failed"]
+            .map(function (k) { return k + "=" + (alerts[k] !== undefined ? alerts[k] : 0); }).join(" · ") + "</div>";
+        setTimeout(pollOnce, 400);
+      })
+      .catch(function (err) { $("replayOut").innerHTML = '<div class="logline">fetch failed: ' + esc(String(err)) + "</div>"; });
+  }
+  $("replaySmoke").addEventListener("click", function () { doReplay("smoke"); });
+  $("replayFlood").addEventListener("click", function () { doReplay("flood"); });
+
+  reconnect();
+})();
+</script>
+</body>
+</html>

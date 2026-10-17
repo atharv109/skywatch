@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Mesh Sim — Skywatch</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#121722; --panel2:#171d2b; --border:#232b3b;
+  --text:#dbe4f0; --dim:#8a97ab; --accent:#4ea1ff;
+  --ok:#30d57f; --okbg:rgba(48,213,127,.14);
+  --warn:#ffb020; --warnbg:rgba(255,176,32,.14);
+  --bad:#ff5a5f; --badbg:rgba(255,90,95,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:0 0 2px}
+.subhead{color:var(--dim);font-size:13px;margin:0 0 14px}
+a{color:var(--accent);text-decoration:none}
+.grid{display:grid;grid-template-columns:repeat(3,1fr) 340px;gap:12px;align-items:start}
+@media (max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
+@media (max-width:700px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.panel h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+label{font-size:12px;color:var(--dim);display:block;margin:6px 0 3px}
+input,textarea,select,button{font:inherit;color:var(--text)}
+input,select{background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:6px 9px;font-size:13px;width:100%}
+button{background:#1d2740;border:1px solid #2d3a58;border-radius:7px;padding:6px 11px;font-size:12.5px;cursor:pointer}
+button:hover{background:#24304f}
+button.primary{background:var(--accent);border-color:var(--accent);color:#06122a;font-weight:600}
+button.d1{border-color:#4a4a26;color:#ffd9a0}
+button.d2{border-color:#264a30;color:#9be7b8}
+button.d3{border-color:#4a2626;color:#ffa0a0}
+button.small{padding:3px 9px;font-size:11.5px}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid var(--border)}
+.chip.ok{background:var(--okbg);color:var(--ok);border-color:rgba(48,213,127,.4)}
+.chip.bad{background:var(--badbg);color:var(--bad);border-color:rgba(255,90,95,.4)}
+.chip.warn{background:var(--warnbg);color:var(--warn);border-color:rgba(255,176,32,.4)}
+.chip.gray{background:rgba(138,151,171,.14);color:#8a97ab;border-color:rgba(138,151,171,.4)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;color:var(--dim)}
+.out{margin-top:10px;font-size:12.5px}
+.kv{padding:4px 0;border-bottom:1px dashed var(--border);font-size:12px}
+.rep{border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:7px;background:var(--panel2)}
+details{margin:4px 0}
+summary{cursor:pointer;color:var(--accent);font-size:12px}
+.msgline{padding:3px 0;border-bottom:1px dashed var(--border);font-size:12.5px;word-break:break-word}
+.stat{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-width:80px}
+.stat b{font-size:17px;display:block}
+.stat span{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+.dim{color:var(--dim)}
+h3.mini{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mesh sim — dark-zone devices</h1>
+  <p class="subhead">Signed Ed25519 uplink packets → gateway sync → downlink bundle, no WebRTC (the page IS the hotspot relay). <a href="/">harness index</a></p>
+
+  <div class="grid" id="deviceGrid"><!-- device panels injected --></div>
+
+  <div class="panel">
+    <h2>Corroboration helper</h2>
+    <div class="row">
+      <select id="corrFrom" style="width:auto"></select><span class="dim">last report →</span>
+      <select id="corrTo" style="width:auto"></select><span class="dim">re-reports it</span>
+      <button id="corrBtn" class="primary">Corroborate (+0.1 device, ≤150 m)</button>
+      <button id="stateBtn">Refresh mesh state</button>
+    </div>
+    <p class="dim" style="font-size:12px;margin:8px 0 0">Clones the selected device's most recent packet at that same slot (new id/ts, same type + coordinates ±0.001) into the OTHER device's queue and syncs both back-to-back — the score reason "+0.1 independent nearby reports" should appear on both in /mesh/state.</p>
+    <div id="corrOut" class="mono"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Live mesh state (GET /mesh/state, 2 s)</h2>
+    <div class="row" id="mcounts" style="margin-bottom:10px"></div>
+    <div id="mstate"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Config</h2>
+    <div class="row">
+      <label style="margin:0;flex:1;min-width:200px">API base
+        <input type="text" id="cfgApi" style="width:100%" placeholder="(same origin)">
+      </label>
+      <button id="cfgSave" style="align-self:flex-end">Save</button>
+    </div>
+    <p class="dim" style="font-size:12px;margin:8px 0 0">/mesh/* needs no secret (packet signatures are the auth). WebCrypto Ed25519 requires a secure context (localhost or https) — without it, devices fall back to the legacy:true unsigned path (stored unverified, never clustered).</p>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(v) { return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function time(t) { return t ? new Date(t).toLocaleTimeString() : "–"; }
+
+  // ---- config ---------------------------------------------------------------
+  var cfg = { api: "" };
+  try { cfg = { api: JSON.parse(localStorage.getItem("skywatch.cfg") || "{}").api || "" }; } catch (e) {}
+  var params = new URLSearchParams(location.search);
+  if (params.get("api")) cfg.api = params.get("api");
+  var apiBase = function () { return (cfg.api || "").replace(/\/+$/, ""); };
+  $("cfgApi").value = cfg.api;
+  $("cfgSave").addEventListener("click", function () {
+    cfg.api = $("cfgApi").value.trim();
+    try { localStorage.setItem("skywatch.cfg", JSON.stringify({ api: cfg.api })); } catch (e) {}
+    refreshState();
+  });
+
+  // ---- device model ---------------------------------------------------------
+  var SEEDS = [
+    { deviceId: "mesh-dev-alpha", lat: 47.6032, lon: -122.3350, name: "Downtown" },
+    { deviceId: "mesh-dev-bravo", lat: 47.6097, lon: -122.3331, name: "Seattle Center" },
+    { deviceId: "mesh-dev-charlie", lat: 47.5980, lon: -122.3450, name: "Waterfront" }
+  ];
+  var devices = SEEDS.map(function (s, i) {
+    return { idx: i, deviceId: s.deviceId, name: s.name, lat: s.lat, lon: s.lon, key: null, legacy: false, queue: [], lastPacket: null };
+  });
+
+  var enc = new TextEncoder();
+  function toB64(buf) {
+    var bytes = new Uint8Array(buf), bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function uuid() { return crypto.randomUUID ? crypto.randomUUID() : "p-" + Date.now() + "-" + Math.floor(Math.random() * 1e8); }
+
+  function initKey(d) {
+    if (!window.crypto || !crypto.subtle) { d.legacy = true; return Promise.resolve(null); }
+    return crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign"]).then(function (pair) {
+      return crypto.subtle.exportKey("raw", pair.publicKey).then(function (raw) {
+        d.key = pair.privateKey; d.pubkeyB64 = toB64(raw); d.legacy = false;
+        return null;
+      });
+    }).catch(function () { d.key = null; d.legacy = true; return null; });
+  }
+
+  // sig message per mesh/sig.ts: `${id}|${type}|${ts}|${lat}|${lon}|${deviceId}`
+  function makePacket(d, type, status, extra) {
+    var pk = {
+      id: uuid(), type: type, status: status,
+      lat: Number(d.lat), lon: Number(d.lon), ts: Date.now(),
+      hops: 1, ttl: 7, deviceId: d.deviceId
+    };
+    if (extra && extra.lat !== undefined) pk.lat = extra.lat;
+    if (extra && extra.lon !== undefined) pk.lon = extra.lon;
+    if (extra && extra.ts !== undefined) pk.ts = extra.ts;
+    if (d.legacy || !d.key) { pk.legacy = true; d.legacy = true; }
+    else {
+      var msg = [pk.id, pk.type, pk.ts, pk.lat, pk.lon, pk.deviceId].map(String).join("|");
+      pk.pubkey = d.pubkeyB64;
+      return crypto.subtle.sign("Ed25519", d.key, enc.encode(msg)).then(function (sig) {
+        pk.sig = toB64(sig);
+        return pk;
+      });
+    }
+    return Promise.resolve(pk);
+  }
+
+  function gatewaySync(d) {
+    if (!d.queue.length) return Promise.resolve({ __local: "queue empty" });
+    var body = { deviceId: d.deviceId, lat: Number(d.lat), lon: Number(d.lon), packets: d.queue };
+    return fetch(apiBase() + "/mesh/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { j.__status = r.status; return j; }); });
+  }
+
+  // ---- device panels --------------------------------------------------------
+  devices.forEach(function (d, i) {
+    var p = document.createElement("div");
+    p.className = "panel";
+    p.innerHTML =
+      '<h2>Device ' + (i + 1) + ' — <span class="mono">' + esc(d.name) + "</span></h2>" +
+      '<label>deviceId</label><input type="text" data-d="deviceId" value="' + esc(d.deviceId) + '">' +
+      '<div class="row"><label style="flex:1;min-width:80px">lat<input type="text" data-d="lat" value="' + d.lat + '"></label>' +
+      '<label style="flex:1;min-width:80px">lon<input type="text" data-d="lon" value="' + d.lon + '"></label>' +
+      '<button class="small" data-act="rand" style="align-self:flex-end">seattle preset</button></div>' +
+      '<h3 class="mini">Queue a report</h3>' +
+      '<div class="row">' +
+      '<button class="d3" data-beacon="Trapped">Trapped</button>' +
+      '<button class="d1" data-beacon="Injured">Injured</button>' +
+      '<button class="d2" data-beacon="Need Rescue">Need rescue</button>' +
+      "</div>" +
+      '<div class="row" style="margin-top:6px">' +
+      '<button class="d3" data-hazard="FLOODED ROAD">Flooded road</button>' +
+      '<button class="d1" data-hazard="SMOKE HERE">Smoke here</button>' +
+      "</div>" +
+      '<div class="row" style="margin-top:6px"><input type="text" data-d="custom" placeholder="custom text (mesh chat msg, 280 max)" style="flex:1;min-width:140px"><button class="small" data-act="msg">msg</button></div>' +
+      '<h3 class="mini">Gateway</h3>' +
+      '<div class="row"><button class="primary" data-act="sync">Sync queue</button>' +
+      '<button data-act="dedup">Replay queue (dedupe test)</button>' +
+      '<button class="small" data-act="clear">clear queue</button></div>' +
+      "<label>Queue (<span data-d='qcount'>0</span> packet(s))</label>" +
+      '<div class="mono" data-d="queue" style="max-height:70px;overflow:auto"></div>' +
+      '<h3 class="mini">Downlink bundle (what the dark phone received)</h3>' +
+      '<div data-d="bundle" class="dim">no sync yet</div>';
+    $("deviceGrid").appendChild(p);
+    p.querySelectorAll("input[data-d]").forEach(function (inp) {
+      inp.addEventListener("input", function () { d[inp.getAttribute("data-d")] = inp.value; });
+    });
+    p.querySelectorAll("button[data-beacon]").forEach(function (b) {
+      b.addEventListener("click", function () { queueAndSync(d, "beacon", b.getAttribute("data-beacon"), p); });
+    });
+    p.querySelectorAll("button[data-hazard]").forEach(function (b) {
+      b.addEventListener("click", function () { queueAndSync(d, "hazard", b.getAttribute("data-hazard"), p); });
+    });
+    p.querySelector('button[data-act="msg"]').addEventListener("click", function () {
+      var t = p.querySelector('input[data-d="custom"]').value.trim().slice(0, 280);
+      if (!t) return;
+      queueAndSync(d, "msg", t, p);
+    });
+    p.querySelector('button[data-act="rand"]').addEventListener("click", function () {
+      d.lat = 47.6097; d.lon = -122.3331;
+      p.querySelector('input[data-d="lat"]').value = d.lat;
+      p.querySelector('input[data-d="lon"]').value = d.lon;
+    });
+    p.querySelector('button[data-act="sync"]').addEventListener("click", function () { runSync(d, p, false); });
+    p.querySelector('button[data-act="dedup"]').addEventListener("click", function () { runSync(d, p, true); });
+    p.querySelector('button[data-act="clear"]').addEventListener("click", function () { d.queue = []; drawQueue(d, p); });
+    d.panel = p;
+  });
+
+  function drawQueue(d, p) {
+    p.querySelector("[data-d=qcount]").textContent = d.queue.length;
+    p.querySelector("[data-d=queue]").innerHTML = d.queue.map(function (q) {
+      return '<div class="kv mono">' + esc(q.type) + " · " + esc(q.status) + " · " + esc(q.id.slice(0, 8)) + "… · " + (q.sig && q.sig.length ? "signed" : (q.legacy ? "legacy" : "?")) + "</div>";
+    }).join("") || '<span class="dim">empty</span>';
+  }
+
+  function queueAndSync(d, type, status, p) {
+    makePacket(d, type, status).then(function (pk) {
+      d.queue.push(pk);
+      d.lastPacket = pk;
+      drawQueue(d, p);
+      return runSync(d, p, false, pk);
+    });
+  }
+
+  function runSync(d, p, keepNote, justQueued) {
+    var bundleEl = p.querySelector("[data-d=bundle]");
+    if (justQueued) bundleEl.innerHTML = '<span class="dim">syncing…</span>';
+    return gatewaySync(d).then(function (j) {
+      drawQueue(d, p);
+      if (j.__status !== 200 || j.error) {
+        bundleEl.innerHTML = '<span class="chip bad">' + (j.__status || "ERR") + " " + esc(j.error || "sync failed") + "</span>";
+        return j;
+      }
+      bundleEl.innerHTML = renderBundle(j);
+      if (!keepNote) {
+        // queue persists so the dedupe replay can resend the EXACT same packet ids
+        $("corrOut").textContent = d.deviceId + ": received=" + j.received + " inserted=" + j.inserted + " deduped=" + j.deduped +
+          " rejected=" + j.rejected + (j.rejectedIds && j.rejectedIds.length ? " rejectedIds=" + j.rejectedIds.join(",") : "") +
+          " scored=" + j.scored + " unscored=" + j.unscored;
+      }
+      refreshState();
+      return j;
+    }).catch(function (err) {
+      bundleEl.innerHTML = '<span class="chip bad">fetch failed: ' + esc(String(err)) + "</span>";
+    });
+  }
+
+  function renderBundle(j) {
+    var b = j.bundle || {};
+    var out = '<div class="rep"><b>downlink bundle</b> <span class="chip gray">' + time(b.generatedAt) + '</span>' +
+      '<div class="kv"><b>Brief (template):</b> ' + esc((b.brief && b.brief.text) || "–") + "</div>" +
+      (b.brief && b.brief.voiceScript ? '<div class="kv mono">voice: ' + esc(b.brief.voiceScript.replace(/<[^>]*>/g, " ")) + "</div>" : "") +
+      (b.nearestVerifiedShelter
+        ? '<div class="kv"><b>Shelter:</b> ' + esc(b.nearestVerifiedShelter.name) + " — " + esc(b.nearestVerifiedShelter.status) + " (" + esc(b.nearestVerifiedShelter.confidence) + ", " + esc(b.nearestVerifiedShelter.distanceKm) + " km)</div>"
+        : '<div class="kv"><b>Shelter:</b> none verified-open</div>') +
+      (b.blockedRoads && b.blockedRoads.length
+        ? "<div class='kv'><b>Blocked roads:</b> " + b.blockedRoads.map(function (r) { return esc(r.name) + " (" + esc(r.status) + ", " + esc(r.confidence) + ")"; }).join("; ") + "</div>"
+        : '<div class="kv"><b>Blocked roads:</b> none fresh</div>') +
+      (b.acks && b.acks.length
+        ? b.acks.map(function (a) { return '<div class="kv"><span class="chip ok">ack</span> ' + esc(a.beaconClusterId.slice(0, 14)) + "… — " + esc(a.message) + "</div>"; }).join("")
+        : '<div class="kv"><b>Acks:</b> none (device contributed no beacon cluster yet)</div>') +
+      (b.messages && b.messages.length
+        ? '<div class="kv"><b>Mesh messages:</b> ' + b.messages.map(function (m) { return '"' + esc(m.text) + '"'; }).join(" · ") + "</div>"
+        : "") +
+      '<div class="kv mono">sync: received=' + j.received + " inserted=" + j.inserted + " deduped=" + j.deduped + " rejected=" + j.rejected + " scored=" + j.scored + " unscored=" + j.unscored + "</div>" +
+      '<details><summary>raw bundle JSON</summary><pre class="mono" style="white-space:pre-wrap">' + esc(JSON.stringify(b, null, 2)) + "</pre></details></div>";
+    return out;
+  }
+
+  // ---- corroboration --------------------------------------------------------
+  function fillCorrSelects() {
+    $("corrFrom").innerHTML = devices.map(function (d, i) {
+      return '<option value="' + i + '">' + esc(d.deviceId) + " (" + esc(d.name) + ")</option>";
+    }).join("");
+    $("corrTo").innerHTML = devices.map(function (d, i) {
+      return '<option value="' + i + '">' + esc(d.deviceId) + " (" + esc(d.name) + ")</option>";
+    }).join("");
+    if (devices.length > 1) $("corrTo").selectedIndex = 1;
+  }
+  fillCorrSelects();
+
+  $("corrBtn").addEventListener("click", function () {
+    var src = devices[Number($("corrFrom").value)], dst = devices[Number($("corrTo").value)];
+    if (!src || !dst || src === dst) { $("corrOut").textContent = "pick two different devices"; return; }
+    if (!src.lastPacket) { $("corrOut").textContent = src.deviceId + " has no packet yet — queue one first"; return; }
+    var ref = src.lastPacket;
+    makePacket(dst, ref.type, ref.status, {
+      // same spot, ~+90 m so the 150 m corroboration radius holds; ts fresh
+      lat: ref.lat, lon: ref.lon + 0.001, ts: Date.now()
+    }).then(function (pk) {
+      dst.queue.push(pk);
+      dst.lastPacket = pk;
+      drawQueue(dst, dst.panel);
+      devices.forEach(function (dd) {
+        if (dd === src) runSync(dd, dd.panel, true);
+        if (dd === dst) runSync(dd, dd.panel, true);
+      });
+      $("corrOut").textContent = "synced " + src.deviceId + " + " + dst.deviceId + " with same-type reports ~0.001° apart — watch /mesh/state for the corroboration reason";
+    });
+  });
+  $("stateBtn").addEventListener("click", refreshState);
+
+  // ---- live state -----------------------------------------------------------
+  function refreshState() {
+    fetch(apiBase() + "/mesh/state").then(function (r) { return r.json(); }).then(function (st) {
+      if (st.error) { $("mcounts").innerHTML = '<span class="chip bad">' + esc(st.error) + "</span>"; return; }
+      $("mcounts").innerHTML =
+        '<div class="stat"><b>' + st.counts.packets + "</b><span>packets</span></div>" +
+        '<div class="stat"><b>' + st.counts.beacons + "</b><span>beacon clusters</span></div>" +
+        '<div class="stat"><b>' + st.coverage.length + "</b><span>coverage</span></div>" +
+        '<div class="stat"><b>' + st.counts.acked + "</b><span>acked</span></div>" +
+        '<div class="stat"><b>' + st.messages.length + "</b><span>msgs</span></div>" +
+        '<div class="stat"><b>' + st.resources.length + "</b><span>resource pins</span></div>";
+      var out = "";
+      out += "<h3 class='mini'>Beacons (ranked priority &gt; lastSeen)</h3>";
+      out += st.beacons.length
+        ? st.beacons.map(function (b) {
+            return '<div class="rep"><b>' + esc(b.kind) + "</b> <span class='chip gray'>P" + esc(b.priority) + "</span> <span class='chip ok'>score " + esc(b.score) + "</span>" +
+              "<div class='dim' style='font-size:12px'>" + esc(b.reports) + " report(s) · " + b.lat.toFixed(4) + ", " + b.lon.toFixed(4) + " · last " + time(b.lastSeen) + (b.ackedAt ? " · acked" : "") + "</div></div>";
+          }).join("")
+        : '<p class="dim">none</p>';
+      out += "<h3 class='mini'>Hazard reports (decayed 30-min)</h3>";
+      out += st.hazardReports.length
+        ? st.hazardReports.slice(0, 25).map(function (h) {
+            var cls = h.verify === "ok" ? "ok" : h.verify === "unsigned" ? "warn" : "bad";
+            var score = h.score === null ? "unscored" : h.score;
+            return '<div class="rep"><b>' + esc(h.status) + "</b> <span class='chip " + cls + "'>" + esc(h.verify) + "</span> <span class='chip gray'>score " + esc(score) + "</span>" +
+              "<div class='dim' style='font-size:12px'>" + h.lat.toFixed(4) + ", " + h.lon.toFixed(4) + " · " + time(h.ts) + " · " + esc(h.id.slice(0, 8)) + "…</div>" +
+              (h.reasons && h.reasons.length ? "<details open><summary>reasons</summary><ul class='mono'>" + h.reasons.map(function (z) { return "<li>" + esc(z) + "</li>"; }).join("") + "</ul></details>" : "") +
+              "</div>";
+          }).join("")
+        : '<p class="dim">none</p>';
+      if (st.messages && st.messages.length) {
+        out += "<h3 class='mini'>Mesh chat (newest 50)</h3>";
+        out += st.messages.map(function (m) {
+          return '<div class="msgline"><span class="mono">' + esc(m.from) + (m.to ? " → " + esc(m.to) : " → mesh") + '</span> "' + esc(m.text) + '" · ' + time(m.ts) + "</div>";
+        }).join("");
+      }
+      if (st.resources && st.resources.length) {
+        out += "<h3 class='mini'>Resource pins on node maps</h3>";
+        out += st.resources.slice(0, 12).map(function (r) {
+          var cls = r.status === "open" ? "ok" : r.status === "closed" ? "bad" : r.status === "full" ? "warn" : "gray";
+          return '<span class="chip ' + cls + '" style="margin:2px 4px 2px 0">' + esc(r.name) + " · " + esc(r.status) + "</span>";
+        }).join("");
+      }
+      $("mstate").innerHTML = out;
+    }).catch(function (err) {
+      $("mcounts").innerHTML = '<span class="chip bad">fetch failed: ' + esc(String(err)) + "</span>";
+    });
+  }
+  setInterval(refreshState, 2000);
+  refreshState();
+
+  // init keys
+  devices.forEach(initKey);
+})();
+</script>
+</body>
+</html>

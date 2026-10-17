@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Judge Sim — Skywatch</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#121722; --panel2:#171d2b; --border:#232b3b;
+  --text:#dbe4f0; --dim:#8a97ab; --accent:#4ea1ff;
+  --ok:#30d57f; --okbg:rgba(48,213,127,.14);
+  --warn:#ffb020; --warnbg:rgba(255,176,32,.14);
+  --bad:#ff5a5f; --badbg:rgba(255,90,95,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:0 0 2px}
+.subhead{color:var(--dim);font-size:13px;margin:0 0 14px}
+a{color:var(--accent);text-decoration:none}
+.grid{display:grid;grid-template-columns:380px 1fr;gap:14px;align-items:start}
+@media (max-width:940px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.panel h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
+input,textarea,select,button{font:inherit;color:var(--text)}
+input,textarea,select{background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:7px 9px;font-size:13px;width:100%}
+button{background:#1d2740;border:1px solid #2d3a58;border-radius:7px;padding:7px 13px;font-size:13px;cursor:pointer;width:auto}
+button:hover{background:#24304f}
+button.primary{background:var(--accent);border-color:var(--accent);color:#06122a;font-weight:600;width:100%}
+button.small{padding:4px 10px;font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid var(--border)}
+.chip.ok{background:var(--okbg);color:var(--ok);border-color:rgba(48,213,127,.4)}
+.chip.warn{background:var(--warnbg);color:var(--warn);border-color:rgba(255,176,32,.4)}
+.chip.bad{background:var(--badbg);color:var(--bad);border-color:rgba(255,90,95,.4)}
+.chip.gray{background:rgba(138,151,171,.14);color:#8a97ab;border-color:rgba(138,151,171,.4)}
+/* phone */
+.phone{background:#0a0d13;border:1px solid #2a3346;border-radius:22px;padding:14px;max-width:380px}
+.phone .bar{border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:10px;display:flex;justify-content:space-between;font-size:11px;color:var(--dim)}
+.thread{height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:7px;padding:4px 2px}
+.bubble{max-width:85%;padding:8px 12px;border-radius:14px;font-size:13px;white-space:pre-wrap}
+.bubble.me{align-self:flex-end;background:#2a4a86;border-bottom-right-radius:4px}
+.bubble.sys{align-self:center;background:transparent;color:var(--dim);font-size:11px;text-align:center}
+.bubble.note{align-self:flex-start;background:#1f2a42;border:1px dashed #2d3a58;color:var(--dim);font-size:11.5px}
+.bubble.botbrief{align-self:flex-start;background:#123b2a;border:1px solid rgba(48,213,127,.4);border-bottom-left-radius:4px}
+.sendrow{display:flex;gap:6px;margin-top:10px}
+.sendrow input{flex:1}
+details{margin:5px 0}
+summary{cursor:pointer;color:var(--accent);font-size:12px}
+.log{font-size:11.5px;padding:5px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--border);margin-bottom:5px;word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
+.dim{color:var(--dim)}
+.brief-block{border-left:2px solid var(--accent);padding-left:9px;margin:4px 0;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Judge sim — full signup → brief flow</h1>
+  <p class="subhead">Acts AS Photon sending signed inbound webhooks (no Delivery needed). <a href="/">harness index</a></p>
+
+  <div class="grid">
+    <div>
+      <!-- phone -->
+      <div class="panel">
+        <h2>Simulated phone</h2>
+        <label>Phone (E.164, the user handle)</label>
+        <input type="text" id="phone" value="+15551230017">
+        <label>Platform</label>
+        <select id="plat"><option value="sms">SMS</option><option value="imessage">iMessage</option></select>
+        <div class="phone" style="margin-top:12px">
+          <div class="bar"><span>Skywatch</span><span id="phoneState" class="chip gray">state unknown</span></div>
+          <div class="thread" id="thread"></div>
+          <div class="sendrow">
+            <input type="text" id="chat" placeholder="Type as the judged user…">
+            <button id="send" class="primary" style="width:auto">Send</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="small" data-quick="hi">hi</button>
+            <button class="small" data-quick="101 Yesler Way, Seattle, WA 98104">address</button>
+            <button class="small" data-quick="english">english (en)</button>
+            <button class="small" data-quick="espanol por favor">español (es)</button>
+            <button class="small" data-quick="Is there smoke near me right now?">ask smoke</button>
+            <button class="small" data-quick="STOP" style="border-color:#6b2026;color:#ff8a8f">STOP</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- post-call -->
+      <div class="panel">
+        <h2>Voice post-call simulation</h2>
+        <label>Skywatch user id (paste from the seeded id / server consent rows)</label>
+        <input type="text" id="voiceUser" placeholder="u_…">
+        <label>Conversation id (auto; dedupe test reuses it)</label>
+        <input type="text" id="voiceConv">
+        <label>Transcript (one turn per line: role:message)</label>
+        <textarea id="voiceTranscript" rows="3">user:The smoke is clearing, shelter is fine</textarea>
+        <label>analysis.summary (optional)</label>
+        <input type="text" id="voiceSummary" value="Caller reports conditions improving at the shelter">
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="voiceSend" style="width:auto">POST /webhooks/voice/post-call</button>
+          <button class="small" id="voiceDedup">Send again (dedupe test)</button>
+        </div>
+        <div id="voiceOut" class="mono" style="margin-top:8px;white-space:pre-wrap"></div>
+      </div>
+    </div>
+
+    <div>
+      <!-- config -->
+      <div class="panel">
+        <h2>Config</h2>
+        <div class="row">
+          <label style="margin:0;flex:1;min-width:200px">API base
+            <input type="text" id="cfgApi" style="width:100%" placeholder="(same origin)">
+          </label>
+          <label style="margin:0;flex:1;min-width:200px" id="toolWrap">TOOL_SECRET (for GET /tools/brief/byPhone)
+            <input type="password" id="cfgSecret" style="width:100%">
+          </label>
+        </div>
+        <label>PHOTON_WEBHOOK_SIGNING_SECRET</label>
+        <input type="password" id="cfgPhoton" placeholder="paste the server's signing secret">
+        <label>ELEVENLABS_VOICE_WEBHOOK_SECRET</label>
+        <input type="password" id="cfgVoice" placeholder="paste the server's voice secret">
+        <button id="cfgSave" style="margin-top:8px">Save config</button>
+        <div class="row" id="authchips" style="margin-top:8px"></div>
+        <p class="dim" style="font-size:12px;margin:8px 0 0">The bot's outbound replies ride Photon delivery (not wired in demo — outbox-only, no GET). The honest end-to-end signal here: the signed webhook is accepted (2xx <span class="mono">enqueued</span>), signup state progresses, and <span class="mono">GET /tools/brief/byPhone</span> returns a renderable brief for the matched user — exactly what the agent side reads.</p>
+      </div>
+
+      <!-- brief viewer -->
+      <div class="panel">
+        <h2>Agent-side brief (GET /tools/brief/byPhone/:platform/:phone)</h2>
+        <div id="briefHead"></div>
+        <div id="briefBody"><p class="dim">send a message as the user to drive the state machine</p></div>
+      </div>
+
+      <!-- log -->
+      <div class="panel">
+        <h2>Wire log (request/response)</h2>
+        <div id="wireLog" class="mono dim">empty</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(v) { return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function log(s) { var el = document.createElement("div"); el.className = "log"; el.textContent = s; var w = $("wireLog"); if (w.firstChild && w.firstChild.nodeType === 3) w.textContent = ""; w.prepend(el); while (w.children.length > 18) w.removeChild(w.lastChild); }
+
+  // ---- config ---------------------------------------------------------------
+  var cfg = { api: "", toolSecret: "", photon: "", voice: "" };
+  try {
+    var s = JSON.parse(localStorage.getItem("skywatch.cfg") || "{}");
+    var p = JSON.parse(localStorage.getItem("skywatch.judge") || "{}");
+    if (s.api) cfg.api = s.api; if (s.toolSecret) cfg.toolSecret = s.toolSecret;
+    if (p.photon) cfg.photon = p.photon; if (p.voice) cfg.voice = p.voice;
+  } catch (e) {}
+  var params = new URLSearchParams(location.search);
+  if (params.get("api")) cfg.api = params.get("api");
+  var apiBase = function () { return (cfg.api || "").replace(/\/+$/, ""); };
+  function url(pth) { return apiBase() + pth; }
+  function saveCfg() {
+    cfg.api = $("cfgApi").value.trim(); cfg.toolSecret = $("cfgSecret").value;
+    cfg.photon = $("cfgPhoton").value; cfg.voice = $("cfgVoice").value;
+    try {
+      localStorage.setItem("skywatch.cfg", JSON.stringify({ api: cfg.api, toolSecret: cfg.toolSecret }));
+      localStorage.setItem("skywatch.judge", JSON.stringify({ photon: cfg.photon, voice: cfg.voice }));
+    } catch (e) {}
+    chips();
+  }
+  function chips() {
+    $("authchips").innerHTML =
+      (cfg.toolSecret ? '<span class="chip ok">TOOL_SECRET set</span>' : '<span class="chip warn">TOOL_SECRET blank (server may accept)</span>') +
+      (cfg.photon ? '<span class="chip ok">photon secret set</span>' : '<span class="chip bad">photon signing secret missing</span>') +
+      (cfg.voice ? '<span class="chip ok">voice secret set</span>' : '<span class="chip warn">voice secret missing</span>');
+  }
+  $("cfgApi").value = cfg.api; $("cfgSecret").value = cfg.toolSecret; $("cfgPhoton").value = cfg.photon; $("cfgVoice").value = cfg.voice;
+  $("cfgSave").addEventListener("click", saveCfg); chips();
+
+  function toolHeaders() {
+    var h = { "Content-Type": "application/json" };
+    if (cfg.toolSecret) { h["Authorization"] = "Bearer " + cfg.toolSecret; h["X-Skywatch-Tool-Secret"] = cfg.toolSecret; }
+    return h;
+  }
+
+  // ---- crypto helpers (HMAC hex, WebCrypto) ---------------------------------
+  var enc = new TextEncoder();
+  function hmacHex(secret, msg) {
+    return crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+      .then(function (k) { return crypto.subtle.sign("HMAC", k, enc.encode(msg)); })
+      .then(function (buf) { return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join(""); });
+  }
+
+  // ---- thread UI ------------------------------------------------------------
+  function bubble(cls, text) {
+    var el = document.createElement("div");
+    el.className = "bubble " + cls; el.textContent = text;
+    var t = $("thread"); t.appendChild(el); t.scrollTop = t.scrollHeight;
+    return el;
+  }
+  function sysNote(text) { bubble("sys", text); }
+  function note(text) { bubble("note", text); }
+  function botBrief(brief) {
+    var el = document.createElement("div");
+    el.className = "bubble botbrief";
+    var h = "<b>SKYWATCH BRIEF (renderable)</b>";
+    brief.hazards.forEach(function (z) { h += '<div class="brief-block"><b>' + esc(z.title) + "</b><br>" + esc(z.type) + " · severity " + esc(z.severity) + " · " + esc(z.timing) + "</div>"; });
+    h += "<div style='margin:4px 0'><b>Actions:</b><ol style='margin:2px 0 0 16px;padding:0'>" + brief.actions.map(function (a) { return "<li>" + esc(a.text) + "</li>"; }).join("") + "</ol></div>";
+    if (brief.shelter) {
+      h += '<div class="brief-block"><b>Shelter:</b> ' + esc(brief.shelter.name) + " — " + esc(brief.shelter.status) + " (conf " + esc(brief.shelter.confidence) + ", " + esc(brief.shelter.distanceKm) + " km, " + esc(brief.shelter.verifiedMinutesAgo) + " min ago)</div>";
+    } else { h += '<div class="brief-block"><b>Shelter:</b> none verified-open</div>'; }
+    if (brief.blockedRoads.length) {
+      h += "<div><b>Blocked roads:</b> " + brief.blockedRoads.map(function (r) { return esc(r.name) + " (" + esc(r.status) + ", conf " + esc(r.confidence) + ")"; }).join("; ") + "</div>";
+    }
+    h += '<div class="dim" style="margin-top:3px">lang ' + esc(brief.lang) + " · source " + esc(brief.officialSource.name) + " · " + esc(brief.emergency) + "</div>";
+    el.innerHTML = h;
+    var t = $("thread"); t.appendChild(el); t.scrollTop = t.scrollHeight;
+  }
+
+  // ---- signed Photon inbound ------------------------------------------------
+  function buildPayload(text) {
+    var phone = $("phone").value.trim();
+    var plat = $("plat").value; // "sms" | "imessage"
+    var platformName = plat === "sms" ? "SMS" : "iMessage";
+    var space = { id: "any;-;+" + phone.replace("+", "+"), platform: platformName, type: "dm", phone: "+15551239999" };
+    return {
+      event: "messages",
+      space: space,
+      message: {
+        id: (crypto.randomUUID ? crypto.randomUUID() : "spc-msg-" + Date.now() + "-" + Math.floor(Math.random() * 1e8)),
+        platform: platformName,
+        direction: "inbound",
+        timestamp: new Date().toISOString(),
+        sender: { id: phone, platform: platformName },
+        space: space,
+        content: { type: "text", text: text }
+      }
+    };
+  }
+
+  function postPhoton(payload) {
+    var rawBody = JSON.stringify(payload);
+    var ts = Math.floor(Date.now() / 1000).toString();
+    if (!cfg.photon) return Promise.reject(new Error("PHOTON_WEBHOOK_SIGNING_SECRET missing — paste it in Config"));
+    return hmacHex(cfg.photon, "v0:" + ts + ":" + rawBody).then(function (hex) {
+      var signature = "v0=" + hex;
+      return fetch(url("/webhooks/photon/message"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Spectrum-Signature": signature,
+          "X-Spectrum-Timestamp": ts
+        },
+        body: rawBody
+      }).then(function (r) { return r.json().then(function (j) { j.__status = r.status; return j; }); });
+    });
+  }
+
+  // ---- brief polling: the agent-side view of the state machine ---------------
+  function pollBrief(tries) {
+    var phone = $("phone").value.trim();
+    var plat = $("plat").value;
+    var req = fetch(url("/tools/brief/byPhone/" + plat + "/" + encodeURIComponent(phone)), { headers: toolHeaders() });
+    return req.then(function (r) {
+      return r.json().then(function (j) {
+        j.__status = r.status;
+        return j;
+      });
+    }).then(function (j) {
+      renderBrief(j);
+      if (j.__status !== 200 && j.__status !== 401 && tries > 0) {
+        return new Promise(function (res) { setTimeout(res, 1400); }).then(function () { return pollBrief(tries - 1); });
+      }
+      return j;
+    });
+  }
+  function renderBrief(j) {
+    var cls = "gray", label = "?";
+    if (j.__status === 200 && !j.error) { cls = "ok"; label = "active — brief renderable"; }
+    else if (/unknown user/i.test(String(j.error))) { cls = "gray"; label = "pre-signup (404: unknown user)"; }
+    else if (String(j.error).indexOf("no resolved location") >= 0) { cls = "warn"; label = "asks-address stage (404)"; }
+    else if (j.__status === 401) { cls = "bad"; label = "401 — set TOOL_SECRET"; }
+    else { cls = "bad"; label = j.__status + ": " + (j.error || "?"); }
+    var ps = $("phoneState");
+    ps.className = "chip " + cls;
+    ps.textContent = label;
+    if (j.__status === 200 && j.actions) botBrief(j);
+    if (j.__status === 200 && j.actions) {
+      $("briefBody").innerHTML = '<details open><summary>raw brief JSON</summary><pre class="mono" style="white-space:pre-wrap">' + esc(JSON.stringify(j, null, 2)) + "</pre></details>";
+    } else {
+      $("briefBody").innerHTML = '<p class="dim">no brief yet — flow: send "hi" → reply with a WA address/ZIP (98104 resolves from fixtures) → pick a language → the brief appears here once a hazard matches.</p>';
+    }
+  }
+
+  function sendFlow(text) {
+    if (!text.trim()) return;
+    var payload = buildPayload(text.trim());
+    bubble("me", text.trim());
+    var isStop = /^stop(\s+(all|now))?$/i.test(text.trim()) || /^unsubscribe$/i.test(text.trim());
+    postPhoton(payload).then(function (j) {
+      log("POST /webhooks/photon/message → " + JSON.stringify(j));
+      if (j.__status === 200 && j.ok) {
+        if (isStop) {
+          sysNote("webhook accepted (STOP is handled silently) — checking consent was revoked…");
+          return new Promise(function (res) { setTimeout(res, 1200); }).then(function () { return pollBrief(0); })
+            .then(function (bj) {
+              log("post-STOP brief route → " + bj.__status + " " + JSON.stringify(bj.error || j.ok));
+              if (bj.__status === 404 && /unknown user/i.test(String(bj.error))) {
+                sysNote("user deleted on STOP — byPhone now 404 (text+voice consent gone). Global constraint 4 holds.");
+              } else {
+                sysNote("post-STOP byPhone returned " + bj.__status + " — check the server's STOP handling");
+              }
+            });
+        }
+        // give the in-process queue a beat, then surface what the agent side can see
+        return new Promise(function (res) { setTimeout(res, 900); }).then(function () { return pollBrief(2); })
+          .then(function (bj) { log("GET /tools/brief/byPhone → " + bj.__status + (bj.error ? " " + bj.error : " (brief)")); });
+      }
+      if (j.__status === 401) sysNote("signature rejected (" + (j.error || "?") + ") — is the pasted secret the server's PHOTON_WEBHOOK_SIGNING_SECRET?");
+      else sysNote("webhook response " + j.__status + ": " + (j.error || JSON.stringify(j)));
+    }).catch(function (err) { sysNote(String(err)); log("webhook fetch failed: " + err); });
+  }
+
+  $("send").addEventListener("click", function () { sendFlow($("chat").value); $("chat").value = ""; });
+  document.querySelectorAll("button[data-quick]").forEach(function (b) {
+    b.addEventListener("click", function () { sendFlow(b.getAttribute("data-quick")); });
+  });
+
+  // ---- voice post-call ------------------------------------------------------
+  $("voiceConv").value = (crypto.randomUUID ? crypto.randomUUID() : "conv-" + Date.now());
+  function voicePayload() {
+    var turns = ($("voiceTranscript").value || "").split("\n").filter(function (l) { return l.trim(); }).map(function (l) {
+      var i = l.indexOf(":");
+      return { role: i > 0 ? l.slice(0, i).trim() : "user", message: i > 0 ? l.slice(i + 1).trim() : l.trim() };
+    });
+    var payload = {
+      type: "post_call_transcription",
+      data: {
+        agent_id: null,
+        conversation_id: $("voiceConv").value.trim(),
+        user_id: $("voiceUser").value.trim() || null,
+        status: "done",
+        transcript: turns
+      }
+    };
+    var summary = $("voiceSummary").value.trim();
+    if (summary) payload.data.analysis = { summary: summary };
+    return payload;
+  }
+  function postVoice() {
+    if (!cfg.voice) { $("voiceOut").textContent = "ELEVENLABS_VOICE_WEBHOOK_SECRET missing — paste it in Config"; return Promise.reject(new Error("no secret")); }
+    var raw = JSON.stringify(voicePayload());
+    var t = Math.floor(Date.now() / 1000).toString();
+    return hmacHex(cfg.voice, t + "." + raw).then(function (hex) {
+      return fetch(url("/webhooks/voice/post-call"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "elevenlabs-signature": "t=" + t + ",v1=" + hex },
+        body: raw
+      }).then(function (r) { return r.json().then(function (j) { j.__status = r.status; return j; }); });
+    });
+  }
+  $("voiceSend").addEventListener("click", function () {
+    postVoice().then(function (j) {
+      log("POST /webhooks/voice/post-call → " + JSON.stringify(j));
+      $("voiceOut").textContent = "POST " + j.__status + " " + JSON.stringify(j) +
+        "\n→ conversation note + post-call summary are attempted asynchronously (Photon send unwired → outbox rows). Check the server logs/Render logs, or the user's conversation via the agent tools.";
+    }).catch(function (err) { log("voice fetch failed: " + err); });
+  });
+  $("voiceDedup").addEventListener("click", function () {
+    postVoice().then(function (j) {
+      log("dedupe replay → " + JSON.stringify(j));
+      $("voiceOut").textContent = "replay " + j.__status + " " + JSON.stringify(j) + "\nexpected: {ok:true, enqueued:false} (id-guarded on conversation_id)";
+    }).catch(function (err) { log("voice dedupe failed: " + err); });
+  });
+
+  sysNote("Sim user: pick a phone, send \"hi\" (grants consent, starts signup), then the address, then a language. STOP removes the user.");
+  pollBrief(0).catch(function (err) { log("initial brief poll failed: " + err); });
+})();
+</script>
+</body>
+</html>

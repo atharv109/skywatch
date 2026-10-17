@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Skywatch Demo Harness</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#121722; --panel2:#171d2b; --border:#232b3b;
+  --text:#dbe4f0; --dim:#8a97ab; --accent:#4ea1ff;
+  --ok:#30d57f; --warn:#ffb020; --bad:#ff5a5f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:26px;margin:0 0 4px}
+.sub{color:var(--dim);margin:0 0 22px;font-size:14px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:14px}
+.card h2{font-size:16px;margin:0 0 6px}
+.card p{margin:0 0 8px;color:var(--dim);font-size:13.5px}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--border)}
+.chip.ok{background:rgba(48,213,127,.12);color:var(--ok);border-color:rgba(48,213,127,.4)}
+.chip.bad{background:rgba(255,90,95,.12);color:var(--bad);border-color:rgba(255,90,95,.4)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Skywatch demo harness</h1>
+  <p class="sub">Test harness for DubHacks '26 — API status below, pages for each surface. Real frontend is separate; this is the lead's bench kit.</p>
+
+  <div class="card">
+    <h2>Pages</h2>
+    <p><b><a href="/ops.html">ops.html</a></b> — operator board: live MapState (SSE + polling fallback), scenario replay, manual check-in, verify runs, dark-zone layer.</p>
+    <p><b><a href="/judge-sim.html">judge-sim.html</a></b> — full signup → brief flow simulator acting as Photon (signed inbound webhooks), plus the voice post-call round-trip.</p>
+    <p><b><a href="/mesh-sim.html">mesh-sim.html</a></b> — 3 simulated dark-zone devices with signed Ed25519 packets, gateway sync, downlink bundles, dedupe replay.</p>
+  </div>
+
+  <div class="card">
+    <h2>API health</h2>
+    <p style="color:var(--text)"><span id="chip" class="chip">checking…</span> <span class="dim" id="detail" style="color:var(--dim)"> GET {API}/health every 4 s</span></p>
+    <p class="mono" id="url" style="color:var(--dim)"></p>
+  </div>
+
+  <div class="card">
+    <h2>Config</h2>
+    <p>Each page keeps its own API base + secrets in <span class="mono">localStorage</span>, with <span class="mono">?api=</span> URL overrides. Default API base is this page's own origin — serve the harness through <span class="mono">node server.mjs</span> (proxy, no CORS needed) rather than a bare static server.</p>
+  </div>
+</div>
+<script>
+(function () {
+  var stored = {};
+  try { stored = JSON.parse(localStorage.getItem("skywatch.cfg") || "{}"); } catch (e) {}
+  var params = new URLSearchParams(location.search);
+  if (params.get("api")) {
+    stored.api = params.get("api");
+    try { localStorage.setItem("skywatch.cfg", JSON.stringify(stored)); } catch (e) {}
+  }
+  var api = (stored.api || "").replace(/\/+$/, "");
+  document.getElementById("url").textContent = "GET " + (api || location.origin) + "/health";
+  var chip = document.getElementById("chip");
+  function tick() {
+    fetch(api + "/health").then(function (r) {
+      return r.json().then(function (j) {
+        if (j && j.ok === true) { chip.className = "chip ok"; chip.textContent = "API healthy"; }
+        else { chip.className = "chip bad"; chip.textContent = "unexpected health body"; }
+      });
+    }).catch(function (err) {
+      chip.className = "chip bad";
+      chip.textContent = "API unreachable" + (err && err.message ? " (" + err.message + ")" : "");
+    });
+  }
+  tick();
+  setInterval(tick, 4000);
+})();
+</script>
+</body>
+</html>
