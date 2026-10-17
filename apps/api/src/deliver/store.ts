@@ -46,7 +46,7 @@ export interface ConversationEntry {
 }
 
 export type OutboxKind = "reply" | "alert";
-export type OutboxStatus = "sent" | "not_wired" | "failed" | "rate_limited";
+export type OutboxStatus = "sent" | "not_wired" | "failed" | "rate_limited" | "consent_hold";
 
 /**
  * Every outbound passes through here (Global Constraint 3). The rate-limit gate
@@ -74,6 +74,8 @@ export interface OutboxRecord {
  */
 export interface DeliverStore {
   getUserByPhone(phone: string): Promise<UserRecord | null>;
+  /** By the surrogate id (= Mongo _id string); the consent re-read for deliverAlert lives here. */
+  getUserById(id: string): Promise<UserRecord | null>;
   createUser(user: Omit<UserRecord, "id">): Promise<UserRecord>;
   updateUser(user: UserRecord): Promise<void>;
   /** True when a user existed and was removed (STOP). */
@@ -139,6 +141,15 @@ export function mongoDeliverStore(db: Db): DeliverStore {
       const doc = await users.findOne({ phone });
       return doc ? docToUser(doc) : null;
     },
+    // A malformed/foreign id must read as "not found", not throw.
+    async getUserById(id) {
+      try {
+        const doc = await users.findOne({ _id: new ObjectId(id) });
+        return doc ? docToUser(doc) : null;
+      } catch {
+        return null;
+      }
+    },
     async createUser(user) {
       const doc = { ...userToDoc(user), _id: new ObjectId() };
       try {
@@ -197,6 +208,12 @@ export function memoryDeliverStore(): DeliverStore {
   return {
     async getUserByPhone(phone) {
       return users.get(phone) ?? null;
+    },
+    async getUserById(id) {
+      for (const record of users.values()) {
+        if (record.id === id) return record;
+      }
+      return null;
     },
     async createUser(user) {
       const record: UserRecord = { ...user, id: `mem-${nextId++}` };

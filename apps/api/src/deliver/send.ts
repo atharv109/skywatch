@@ -70,11 +70,14 @@ export async function isAlertBlocked(
   return last !== null && (last.status === "sent" || last.status === "not_wired");
 }
 
-export type AlertOutcome = "sent" | "not_wired" | "failed" | "rate_limited";
+export type AlertOutcome = "sent" | "not_wired" | "failed" | "rate_limited" | "consent_hold";
 
 /**
- * Deliver-time alert send for Task 5's pipeline: gate first by userId + rateKey
- * (scenario/type, commonly the hazard sourceId), then sendOutbound.
+ * Deliver-time alert send for Task 5's pipeline: consent gate first (Global
+ * Constraint 3, re-read fresh from the store by id — a pipeline that selected
+ * users earlier must never alert a revoked/residue record), then the
+ * 1/user/hazard/2h rate gate by userId + rateKey (scenario/type, commonly the
+ * hazard sourceId), then sendOutbound.
  */
 export async function deliverAlert(
   ctx: SendContext,
@@ -84,6 +87,25 @@ export async function deliverAlert(
 ): Promise<AlertOutcome> {
   const store = await ctx.store();
   const now = ctx.now();
+  const fresh = await store.getUserById(user.id);
+  if (!fresh || !fresh.consentText || !fresh.consentVoice) {
+    // Visible skip (documented choice): record a "consent_hold" alert row — never
+    // counted by the rate gate (which reads only sent/not_wired) and never sent.
+    // Consent requires BOTH flags (they are granted and revoked together).
+    await store.appendOutbox({
+      userId: user.id,
+      kind: "alert",
+      rateKey,
+      spaceId: user.spaceId,
+      platform: user.platform,
+      text,
+      status: "consent_hold",
+      error: "consent not granted (text+voice must both be true; missing/revoked user record); nothing sent",
+      createdAt: now,
+      sentAt: null,
+    });
+    return "consent_hold";
+  }
   if (await isAlertBlocked(store, user.id, rateKey, now)) {
     // Record the suppressed attempt so the gate is observable in the outbox
     // (status "rate_limited" — which the gate itself does not count).

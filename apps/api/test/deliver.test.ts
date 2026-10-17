@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
 import { createApp } from "../src/server.ts";
 import { memoryStore } from "../src/store.ts";
-import { memoryDeliverStore, type DeliverStore } from "../src/deliver/store.ts";
+import { memoryDeliverStore, type DeliverStore, type UserRecord } from "../src/deliver/store.ts";
 import { createInboundRuntime, type InboundRuntime } from "../src/deliver/runtime.ts";
 import { deliverAlert, isAlertBlocked, ALERT_WINDOW_MS, type SendContext } from "../src/deliver/send.ts";
 import {
@@ -409,7 +409,23 @@ describe("rate limit gate (1 alert / user / hazard / 2h, deliver-time outbox loo
   it("deliverAlert sends → rate_limited on the second → sends again for a different rateKey; suppressed attempts are recorded", async () => {
     const store = memoryDeliverStore();
     const ctx = alertCtx(store);
-    const user = { id: "u1", spaceId: "any;-;+15551239999", platform: "imessage" as const };
+    const owner = await store.createUser({
+      phone: "+15551230999",
+      platform: "imessage",
+      spaceId: "any;-;+15551239999",
+      lang: "en",
+      state: "active",
+      loc: null,
+      zip: null,
+      consentText: true,
+      consentVoice: true,
+      addressAttempts: 0,
+      askedZip: false,
+      langConfirmPending: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const user = { id: owner.id, spaceId: owner.spaceId, platform: owner.platform };
     expect(await deliverAlert(ctx, user, "smoke:medium:a", "evac text")).toBe("not_wired"); // creds unset
     expect(await deliverAlert(ctx, user, "smoke:medium:a", "evac text again")).toBe("rate_limited");
     expect(await deliverAlert(ctx, user, "smoke:medium:b", "different hazard")).toBe("not_wired");
@@ -421,5 +437,48 @@ describe("rate limit gate (1 alert / user / hazard / 2h, deliver-time outbox loo
 
     // a rate_limited row must NOT extend the block: past the window of the sent one, gate opens
     expect(await isAlertBlocked(store, user.id, "smoke:medium:a", NOW + ALERT_WINDOW_MS + 1)).toBe(false);
+  });
+
+  it("consent gate: text/voice=false or absent flags block the alert, record consent_hold, and never count toward the 2h gate", async () => {
+    const store = memoryDeliverStore();
+    const ctx = alertCtx(store);
+    const defaults = (phone: string) => ({
+      phone,
+      platform: "imessage" as const,
+      spaceId: `any;-;${phone}`,
+      lang: "en" as const,
+      state: "active" as const,
+      loc: null,
+      zip: null,
+      consentText: true,
+      consentVoice: true,
+      addressAttempts: 0,
+      askedZip: false,
+      langConfirmPending: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const textFalse = await store.createUser(defaults("+15551236001"));
+    await store.updateUser({ ...textFalse, consentText: false });
+    const voiceFalse = await store.createUser(defaults("+15551236002"));
+    await store.updateUser({ ...voiceFalse, consentVoice: false });
+    const absent = await store.createUser(defaults("+15551236003"));
+    const residue: Record<string, unknown> = { ...absent };
+    delete residue["consentText"]; // flags absent entirely (stale/schema-drift residue)
+    delete residue["consentVoice"];
+    await store.updateUser(residue as unknown as UserRecord);
+
+    for (const flagged of [textFalse, voiceFalse, absent]) {
+      expect(await deliverAlert(ctx, flagged, "hazard-c", "should never go out")).toBe("consent_hold");
+      // the consent_hold rows must not register as a sent alert in the 2h gate
+      expect(await isAlertBlocked(store, flagged.id, "hazard-c", NOW + 60 * 60 * 1000)).toBe(false);
+    }
+    const rows = (await store.listOutbox()).filter((r) => r.rateKey === "hazard-c");
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.status === "consent_hold")).toBe(true);
+
+    // restoring consent on the first user: the earlier consent_hold did not count, so the alert goes out
+    await store.updateUser({ ...textFalse, consentText: true, consentVoice: true });
+    expect(await deliverAlert(ctx, textFalse, "hazard-c", "now goes out")).toBe("not_wired");
   });
 });
