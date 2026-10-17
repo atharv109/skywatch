@@ -1,24 +1,29 @@
 /**
- * The post-call summary skeleton table (Task 7 fix wave 3, demo beat 6): a
+ * The post-call summary skeleton table (Task 7 fix wave 3/4, demo beat 6): a
  * compact per-language skeleton for the deterministic summary text sent after a
  * user-routed post-call outcome — same philosophy as the Task 5 safety-floor
  * templates in brief/fallback.ts, but a SEPARATE small table:
  *
  * - No Gemini, no network — composition is pure interpolation.
- * - ONLY brief fields are interpolated, and the source-facts (hazard title,
- *   actions[0].text) go in VERBATIM in every language. The brief's own
- *   `emergency` field is English in every brief (brief/build.ts EMERGENCY_LINE),
- *   so non-en rows carry a translated emergency line of their own.
+ * - ONLY brief fields are interpolated, and the source-fact hazard TITLE goes in
+ *   VERBATIM in every language. ACTION sentences are NOT re-translated here:
+ *   per-action strings are IMPORTED from brief/fallback.ts TEMPLATES (wave 4) —
+ *   the same action id the rule table chose renders the same sentence in the
+ *   alert path and in the post-call summary, by construction.
+ * - The brief's own `emergency` field is English in every brief
+ *   (brief/build.ts EMERGENCY_LINE), so non-en rows carry a translated
+ *   emergency line of their own.
  * - A missing row falls back to the en row (defensive — `Lang` is closed, so
  *   unreachable, but the lookup is still typed through a fallback helper).
  *
- * DUPLICATION FLAG: the emergency strings for es/zh/tl/vi/ar mirror the
- * module-private TEMPLATES in brief/fallback.ts verbatim. brief/fallback.ts
- * exports only fallbackRender (Task 5 encapsulation), so the strings cannot be
- * imported without a scope-crossing refactor; if an emergency line is ever
- * corrected there, mirror the change here.
+ * DUPLICATION FLAG (mirrors brief/fallback.ts header): the per-language
+ * emergency strings for es/zh/tl/vi/ar are mirrored from brief/fallback.ts
+ * TEMPLATES verbatim — those may not be extracted (fallback exports TEMPLATES
+ * but its header/strings/logic stay untouched); if an emergency line is ever
+ * corrected there, mirror the change here. Each file's header comments the other.
  */
 import type { Lang, UserBrief } from "../types/brief.ts";
+import { TEMPLATES as FALLBACK_TEMPLATES } from "../brief/fallback.ts";
 
 interface SummaryTemplate {
   /** The lead with the hazard title interpolated ("" title slot). */
@@ -89,7 +94,12 @@ export function postCallSummary(
 ): string {
   const t = TEMPLATES[brief.lang] ?? EN_TEMPLATE;
   const title = brief.hazards[0]?.title ?? null;
-  const topAction = brief.actions[0]?.text ?? null;
+  // Action sentence: the SAME per-language mapping the alert fallback path uses
+  // (brief/fallback.ts TEMPLATES.actions keyed by the rule-table action id) —
+  // untranslated/unknown id falls back to the brief's own verbatim text.
+  const rawAction = brief.actions[0] ?? null;
+  const fallbackActions = FALLBACK_TEMPLATES[brief.lang].actions;
+  const actionText = rawAction ? (fallbackActions[rawAction.id] ?? rawAction.text) : null;
   const shelter =
     brief.shelter && brief.shelter.confidence >= 0.5 && brief.shelter.status === "open"
       ? t.shelterOpen.replace("{name}", brief.shelter.name)
@@ -100,7 +110,7 @@ export function postCallSummary(
   const link = publicBaseUrlSet ? `${publicBaseUrl.replace(/\/+$/, "")}/b/${userId}` : null;
   const parts = [
     (title ? t.head.replace("{title}", title) : t.headBare),
-    topAction,
+    actionText,
     shelter,
     link,
   ].filter((part): part is string => part !== null);

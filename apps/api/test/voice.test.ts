@@ -176,12 +176,13 @@ describe("POST /webhooks/voice/post-call", () => {
 // beat 6) — deterministic, lastBrief-composed, rate-limit exempt, consent-fenced.
 import { POST_CALL_SUMMARY_RATE_KEY, type VoicePostCallPayload } from "../src/deliver/voice.ts";
 import { postCallSummary } from "../src/deliver/post_call_summary.ts";
+import { fallbackRender, TEMPLATES as fallbackTemplates } from "../src/brief/fallback.ts";
 import type { UserBrief } from "../src/types/brief.ts";
 
 const SUMMARY_BRIEF: UserBrief = {
   userId: "mem-1",
   lang: "es",
-  actions: [{ id: "keep-windows-closed", text: "Close windows and stay indoors." }],
+  actions: [{ id: "close-windows", text: "Close windows and doors to keep outside air and smoke out." }],
   hazards: [{ type: "smoke", severity: 3, title: "Smoke plume near Snoqualmie", timing: "now", validFrom: 0, validTo: 9 }],
   shelter: {
     id: "seed-shelter-1",
@@ -201,7 +202,7 @@ describe("post-call summary (demo beat 6)", () => {
   it("postCallSummary: composed only from brief fields; shelter when confident, else official-source nudge; link only when PUBLIC_BASE_URL set", () => {
     const withLink = postCallSummary({ ...SUMMARY_BRIEF, lang: "en" }, "mem-1", true, "https://skywatch.onrender.com");
     expect(withLink).toContain("Smoke plume near Snoqualmie");
-    expect(withLink).toContain("Close windows and stay indoors.");
+    expect(withLink).toContain("Close windows and doors to keep outside air and smoke out.");
     expect(withLink).toContain("Centro de la Raza is verified open");
     expect(withLink).toContain("https://skywatch.onrender.com/b/mem-1");
     expect(withLink).toContain("Call 911 if you are in danger.");
@@ -359,25 +360,25 @@ const LANG_MARKERS: Array<[Lang, { present: RegExp[]; absent: RegExp[] }]> = [
   ["en", { present: [/Skywatch follow-up: /, /is verified open/, /Call 911 if you are in danger\./], absent: [] }],
   ["es",
     {
-      present: [/Seguimiento de Skywatch: /, /Refugio .* verificado como abierto/, /Llame al 911/],
-      absent: [/is verified open/, /check official source/, /Skywatch follow-up/],
+      present: [/Seguimiento de Skywatch: /, /Cierre puertas y ventanas/, /Refugio .* verificado como abierto/, /Llame al 911/],
+      absent: [/is verified open/, /check official source/, /Skywatch follow-up/, /Close windows and doors to keep outside air/],
     },
   ],
   [
     "zh",
-    { present: [/Skywatch 跟进：/, /已核实为开放/, /如有危险，请拨打911。/], absent: [/is verified open/, /check official source/, /Skywatch follow-up/] },
+    { present: [/Skywatch 跟进：/, /请关好门窗/, /已核实为开放/, /如有危险，请拨打911。/], absent: [/is verified open/, /check official source/, /Skywatch follow-up/, /Close windows and doors to keep outside air/] },
   ],
   [
     "tl",
-    { present: [/Update mula sa Skywatch: /, /Napatunayang bukas ang tuluyan/, /Tumawag sa 911/], absent: [/is verified open/, /check official source/] },
+    { present: [/Update mula sa Skywatch: /, /Isara ang mga bintana/, /Napatunayang bukas ang tuluyan/, /Tumawag sa 911/], absent: [/is verified open/, /check official source/, /Close windows and doors to keep outside air/] },
   ],
   [
     "vi",
-    { present: [/Cập nhật từ Skywatch: /, /đã được xác nhận còn mở/, /Gọi 911/], absent: [/is verified open/, /check official source/] },
+    { present: [/Cập nhật từ Skywatch: /, /Hãy đóng cửa sổ/, /đã được xác nhận còn mở/, /Gọi 911/], absent: [/is verified open/, /check official source/, /Close windows and doors to keep outside air/] },
   ],
   [
     "ar",
-    { present: [/تحديث من Skywatch/, /تم التأكد أن المأوى/, /اتصل بالرقم 911/], absent: [/is verified open/, /check official source/] },
+    { present: [/تحديث من Skywatch/, /أغلق النوافذ والأبواب/, /تم التأكد أن المأوى/, /اتصل بالرقم 911/], absent: [/is verified open/, /check official source/, /Close windows and doors to keep outside air/] },
   ],
 ];
 
@@ -390,13 +391,30 @@ describe("post-call summary language awareness (fix wave 3)", () => {
     }
   });
 
-  it("non-en interpolates title and action verbatim (source-facts, not translations), link shape unchanged", () => {
+  it("non-en: title interpolated verbatim (source-fact) but the action uses the fallback template's translated string; link shape unchanged", () => {
     const text = postCallSummary({ ...SUMMARY_BRIEF, lang: "es" }, "mem-1", true, "https://skywatch.onrender.com");
     expect(text).toContain("Smoke plume near Snoqualmie");
-    expect(text).toContain("Close windows and stay indoors.");
+    expect(text).toContain("Cierre puertas y ventanas para que no entre el humo.");
+    expect(text).not.toContain("Close windows and doors to keep outside air and smoke out.");
     expect(text).toContain("https://skywatch.onrender.com/b/mem-1");
     // the brief's English EMERGENCY_LINE is NOT used outside en (translated row instead)
     expect(text).not.toContain("Call 911 if you are in danger.");
+  });
+
+  it("consistency: the SAME action id renders the SAME translated string in the alert fallback path and the post-call summary", () => {
+    for (const lang of ["es", "zh", "tl", "vi", "ar"] as const) {
+      const brief = { ...SUMMARY_BRIEF, lang };
+      const action = fallbackTemplates[lang].actions["close-windows"];
+      expect(action).toBeTruthy();
+      expect(fallbackRender(brief).text).toContain(action!);
+      expect(postCallSummary(brief, "mem-1", false, "http://localhost:3000")).toContain(action!);
+    }
+  });
+
+  it("an action id missing from the fallback table falls back to the brief's verbatim text", () => {
+    const brief = { ...SUMMARY_BRIEF, lang: "es" as const, actions: [{ id: "made-up-action", text: "Verbatim brief text." }] };
+    const text = postCallSummary(brief, "mem-1", false, "http://localhost:3000");
+    expect(text).toContain("Verbatim brief text.");
   });
 
   it("es unsure shelter: the per-language check-official-source line, never the English one", () => {
@@ -413,7 +431,7 @@ describe("post-call summary language awareness (fix wave 3)", () => {
 
   it("en summary is byte-identical to the pre-fix-wave output", () => {
     expect(postCallSummary({ ...SUMMARY_BRIEF, lang: "en" }, "mem-1", true, "https://skywatch.onrender.com")).toBe(
-      "Skywatch follow-up: Smoke plume near Snoqualmie Close windows and stay indoors. Centro de la Raza is verified open https://skywatch.onrender.com/b/mem-1\nCall 911 if you are in danger.",
+      "Skywatch follow-up: Smoke plume near Snoqualmie Close windows and doors to keep outside air and smoke out. Centro de la Raza is verified open https://skywatch.onrender.com/b/mem-1\nCall 911 if you are in danger.",
     );
   });
 });

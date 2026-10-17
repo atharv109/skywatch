@@ -217,3 +217,36 @@ FIX 1 (language-aware post-call summary) + FIX 2 (de-vacuous STOP/revoked test);
 - **Verification:** tsc clean; hermetic 164 pass / 5 skip (169 total); gated
   suite with MONGODB_URI on local mongod (throwaway db `skywatch-fixwave3`,
   dropped after): 169/169, 16 files.
+
+---
+
+## Fix wave 4 (final polish, commit 70b1c96, not pushed)
+
+FIX: non-en post-call summaries now use the SAME translated action strings the
+alert fallback path uses; scope guard respected (fallback.ts exports-only +
+cross-ref comment, post_call_summary.ts, voice.test.ts).
+
+- **fallback.ts (authorized-edit discipline held):** `TEMPLATES` + the
+  `Template` interface now exported; strings/logic untouched; header gains the
+  mirror cross-reference naming post_call_summary.ts (emergency lines) and the
+  action-import contract.
+- **post_call_summary.ts:** action sentence resolves per language via
+  `FALLBACK_TEMPLATES[brief.lang].actions[action.id]`, falling back to the
+  brief's verbatim text when the id has no row (tested) — identical action id
+  now renders the identical sentence in both the alert path and the post-call
+  summary BY CONSTRUCTION (one table, both importers). The es/zh/tl/vi/ar 911
+  emergency strings stay mirrored here (fallback.ts edits limited to exports);
+  the DUPLICATION FLAG in both headers names the other file both ways.
+- **Tests (voice.test.ts):** table-driven markers extended — non-en must
+  contain the translated close-windows sentence and NOT the English one; new
+  consistency test drives fallbackRender + postCallSummary for all five
+  non-en languages and asserts both outputs contain the same table string;
+  missing-id fallback-to-verbatim test; en byte-identical regression still
+  green (en action table empty -> verbatim). Test-fixture realism fix along
+  the way: the wave-2 summary fixture used a synthetic action id
+  ("keep-windows-closed"), replaced with the rule table's real
+  "close-windows" (id + verbatim English text from src/brief/rules.ts) — that
+  synthetic id is what initially surfaced as 3 red tests, not a code defect.
+- **Verification:** tsc clean; hermetic 166 pass / 5 skip (171 total); gated
+  suite with MONGODB_URI on local mongod (throwaway db `skywatch-fixwave4`,
+  dropped after): 171/171, 16 files.

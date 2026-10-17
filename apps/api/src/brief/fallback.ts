@@ -6,10 +6,17 @@
  * name a place, road or number that is not in the brief. Used directly when
  * Gemini is unset / REPLAY=1, and as the forced fallback after the validator
  * rejects the model output.
+ *
+ * MIRROR NOTE (Task 7 fix wave 3/4): src/deliver/post_call_summary.ts keeps its
+ * own post-call summary skeletons and mirrors the per-language EMERGENCY lines
+ * below verbatim; the per-ACTION strings, however, are imported from this table
+ * (TEMPLATES is exported) so the alert path and the post-call summary path can
+ * never drift apart on an action sentence. If an emergency line changes here,
+ * mirror it there — both files comment the other.
  */
 import type { HazardType, Lang, UserBrief } from "../types/brief.ts";
 
-interface Template {
+export interface Template {
   hazard: Record<HazardType, string>;
   actions: Record<string, string>;
   shelter: string;
@@ -17,7 +24,7 @@ interface Template {
   emergency: string;
 }
 
-const TEMPLATES: Record<Lang, Template> = {
+export const TEMPLATES: Record<Lang, Template> = {
   en: {
     // en renders the brief's own hazard title + timing as the lead (see fallbackRender).
     hazard: { smoke: "", flood: "", aqi: "", alert: "" },
