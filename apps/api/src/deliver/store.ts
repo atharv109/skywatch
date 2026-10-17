@@ -55,7 +55,7 @@ export type OutboxStatus = "sent" | "not_wired" | "failed" | "rate_limited" | "c
  */
 export interface OutboxMeta {
   lang: Lang;
-  source: "gemini" | "brief-fallback";
+  source: "gemini" | "fallback";
   brief: UserBrief;
 }
 

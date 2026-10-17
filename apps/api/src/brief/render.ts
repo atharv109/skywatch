@@ -1,15 +1,19 @@
 /**
  * The Gemini alert renderer (backend-build-plan.md Task 5).
  *
- * This file is the VEYZL "before" commit: the model writes freely from the brief
- * JSON and whatever comes back is delivered — the mention validator, the retry/
- * fallback chain and the staleness enforcement land in the next commit. The only
- * hard gate already present (Global Constraint 3 via the brief builder): the
- * renderer never sees feed docs, just the locked UserBrief; when Gemini is unset
- * (or REPLAY=1) the deterministic brief-fields join below is used instead.
+ * Commit B ("after"): the "before" commit delivered whatever Gemini wrote from the
+ * brief JSON; this commit adds the gates — every render passes src/brief/validator.ts
+ * (each shelter/road/number the text mentions must be in the brief), entity
+ * violations go straight to the pre-translated per-language fallback (no retry:
+ * hallucination is not fixed by asking again), format violations (empty, too
+ * long, unparseable, HTTP failure) get exactly one retry, and the per-language
+ * fallback template is the guarantee behind all of it. When Gemini is unset or
+ * REPLAY=1 the fallback template is used directly, no network.
  */
 import type { Config } from "../config.ts";
 import type { Lang, UserBrief } from "../types/brief.ts";
+import { fallbackRender } from "./fallback.ts";
+import { validateRendered, hasEntityViolation, type Violation } from "./validator.ts";
 
 export type Fetcher = typeof fetch;
 
@@ -51,6 +55,8 @@ export function promptFor(brief: UserBrief): string {
     "Rules:",
     `- Write "text" in ${LANG_NAMES[brief.lang]} (language code "${brief.lang}"), at most 300 characters.`,
     '- "voiceScript" is what a voice agent reads aloud to the same person, in the same language.',
+    "- Use ONLY the facts in the brief: never mention a shelter, road, place, capacity, distance or time that is not in the brief. If \"shelter\" is null, do not name any shelter.",
+    "- Use ONLY numbers that already appear in the brief (911 may be used for the emergency line).",
     "- Work naturally from the hazards and actions; keep the tone calm and direct.",
     "",
     'Reply with ONLY minified JSON, no markdown fences: {"text":"...","voiceScript":"..."}',
@@ -102,21 +108,6 @@ export async function callGemini(
   };
 }
 
-/**
- * Deliver-time deterministic text, built ONLY from brief fields so the safety rule
- * (never name a place/road/number that is not in the brief) holds whenever Gemini
- * is not usable. Moved here from pipeline/run.ts for Task 5.
- */
-export function briefText(brief: UserBrief): string {
-  const lines: string[] = [];
-  const worst = brief.hazards[0];
-  if (worst) lines.push(`${worst.title} — ${worst.timing}.`);
-  for (const action of brief.actions.slice(0, 2)) lines.push(action.text);
-  if (brief.shelter) lines.push(`Open shelter: ${brief.shelter.name}, about ${brief.shelter.distanceKm} km away.`);
-  lines.push(brief.emergency);
-  return lines.join(" ");
-}
-
 export interface RenderArgs {
   brief: UserBrief;
   config: Pick<Config, "geminiApiKey" | "replay">;
@@ -125,7 +116,7 @@ export interface RenderArgs {
 }
 
 export interface RenderedAlert extends GeminiRender {
-  source: "gemini" | "brief-fallback";
+  source: "gemini" | "fallback";
 }
 
 /** Live only when a key is set AND we are not in fixture replay mode. */
@@ -133,20 +124,45 @@ export function isLiveRender(config: Pick<Config, "geminiApiKey" | "replay">): b
   return Boolean(config.geminiApiKey) && !config.replay;
 }
 
+type Attempt = { ok: true; render: GeminiRender } | { ok: false; violations: Violation[] };
+
+async function attemptGemini(
+  brief: UserBrief,
+  apiKey: string,
+  fetcher?: Fetcher,
+): Promise<Attempt> {
+  try {
+    const render = await callGemini(promptFor(brief), apiKey, { fetcher });
+    const verdict = validateRendered(render, brief);
+    return verdict.ok ? { ok: true, render } : { ok: false, violations: verdict.violations };
+  } catch (err) {
+    return { ok: false, violations: [{ kind: "format", detail: err instanceof Error ? err.message : String(err) }] };
+  }
+}
+
 /**
- * Commit A: one Gemini attempt when live, whatever comes back is delivered;
- * anything that throws (unset key, REPLAY, HTTP/JDGE failure) falls back to the
- * deterministic brief-fields join. No validator, no retry, no staleness gate yet.
+ * Task 5 render pipeline: live Gemini -> validator -> (format violations only)
+ * one retry -> the per-language fallback template. Non-live (unset key /
+ * REPLAY=1) is the fallback template directly, with no network call.
  */
 export async function renderAlert(args: RenderArgs): Promise<RenderedAlert> {
-  if (isLiveRender(args.config)) {
-    try {
-      const out = await callGemini(promptFor(args.brief), args.config.geminiApiKey as string, { fetcher: args.fetcher });
-      return { ...out, source: "gemini" };
-    } catch (err) {
-      console.error("render: Gemini failed, using brief fallback:", err instanceof Error ? err.message : err);
-    }
+  if (!isLiveRender(args.config)) {
+    return { ...fallbackRender(args.brief), source: "fallback" };
   }
-  const fallback = briefText(args.brief);
-  return { text: fallback, voiceScript: fallback, source: "brief-fallback" };
+  const apiKey = args.config.geminiApiKey as string;
+  const first = await attemptGemini(args.brief, apiKey, args.fetcher);
+  if (first.ok) return { ...first.render, source: "gemini" };
+  // Entity violation (invented shelter/road/number): no retry on a safety reject.
+  if (hasEntityViolation({ ok: false, violations: first.violations })) {
+    console.error(
+      "render: rejected invented mentions (",
+      first.violations.map((v) => v.detail).join("; "),
+      ") -> fallback",
+    );
+    return { ...fallbackRender(args.brief), source: "fallback" };
+  }
+  const second = await attemptGemini(args.brief, apiKey, args.fetcher);
+  if (second.ok) return { ...second.render, source: "gemini" };
+  console.error("render: Gemini output invalid twice -> fallback");
+  return { ...fallbackRender(args.brief), source: "fallback" };
 }
