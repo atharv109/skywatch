@@ -14,6 +14,8 @@ export const COLLECTIONS = {
   roads: "roads",
   conversations: "conversations",
   outbox: "outbox",
+  /** Task 6 voice check-in queue records (Delivery consumes them). */
+  verifyRequests: "verify_requests",
 } as const;
 
 let client: MongoClient | null = null;
@@ -83,5 +85,10 @@ export async function ensureIndexes(db: Db): Promise<void> {
   ]);
   await db.collection(COLLECTIONS.outbox).createIndexes([
     { key: { sentAt: 1 }, name: "sentAt_1" },
+  ]);
+  // Task 6: requestId is the deterministic upsert key (vr:<resourceId>:<hazard>),
+  // so a re-run of /verify/run never duplicates a pending request.
+  await db.collection(COLLECTIONS.verifyRequests).createIndexes([
+    { key: { requestId: 1 }, name: "requestId_1", unique: true },
   ]);
 }

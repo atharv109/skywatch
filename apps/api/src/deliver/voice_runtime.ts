@@ -1,0 +1,67 @@
+/**
+ * Wiring between POST /webhooks/voice/post-call and the voice outcome modules
+ * (Task 6) — mirrors src/deliver/runtime.ts: verify on the RAW body, id-guarded
+ * sequential async processing after the 2xx ack (dedupe key: conversation_id).
+ */
+import type { Config } from "../config.ts";
+import { getDb } from "../db/client.ts";
+import { createInboundQueue } from "./queue.ts";
+import { mongoDeliverStore, type DeliverStore } from "./store.ts";
+import { mongoVerifyStore } from "../verify/store.ts";
+import { outcomeFor, processVoiceOutcome, verifyVoiceWebhook, type VoiceVerifyResult, type VoicePostCallPayload } from "./voice.ts";
+
+export interface VoiceRuntime {
+  check(rawBody: string, header: string | null | undefined, now: number): VoiceVerifyResult;
+  /** Parse + guard + enqueue one raw webhook body; false = acked but nothing to do. */
+  accept(rawBody: string): { enqueued: boolean };
+  /** Test seam: resolves once everything enqueued so far has been processed. */
+  drain(): Promise<void>;
+}
+
+export function createVoiceRuntime(
+  config: Config,
+  stores: {
+    deliver: () => Promise<DeliverStore>;
+    verify: () => Promise<import("../verify/store.ts").VerifyStore>;
+  } = {
+    deliver: () => getDb(config).then(mongoDeliverStore),
+    verify: () => getDb(config).then(mongoVerifyStore),
+  },
+): VoiceRuntime {
+  const queue = createInboundQueue<VoicePostCallPayload>(
+    async (payload) => {
+      await processVoiceOutcome(payload, {
+        config,
+        deliver: await stores.deliver(),
+        verify: await stores.verify(),
+        now: Date.now(),
+      });
+    },
+    { dedupeKey: (payload) => payload.data?.conversation_id ?? undefined },
+  );
+  return {
+    check(rawBody, header, now) {
+      return verifyVoiceWebhook({ rawBody, signature: header, secret: config.elevenlabsVoiceWebhookSecret, now });
+    },
+    accept(rawBody) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        return { enqueued: false };
+      }
+      // Only the transcription event carries an outcome; unknown future types ack+drop.
+      if (typeof parsed !== "object" || parsed === null) return { enqueued: false };
+      const payload = parsed as VoicePostCallPayload;
+      if (outcomeFor(payload) === null) return { enqueued: false };
+      queue.enqueue(payload);
+      return { enqueued: true };
+    },
+    drain: () => queue.drain(),
+  };
+}
+
+/** Null-object runtime for tests that never touch the voice webhook route. */
+export function stubVoiceRuntime(): VoiceRuntime {
+  return { check: () => "missing-header", accept: () => ({ enqueued: false }), drain: async () => undefined };
+}

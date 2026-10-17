@@ -22,7 +22,7 @@ export interface MapState {
     sourceId: string;
     kind: string;
     name: string;
-    status: "open" | "unknown" | "closed";
+    status: "open" | "unknown" | "closed" | "full";
     confidence: number;
     partner: boolean;
     lat: number;
@@ -50,10 +50,13 @@ export interface MapState {
 export { confidenceFor, halfLifeMinutes } from "../confidence.ts";
 import { confidenceFor } from "../confidence.ts";
 
-export function displayedStatus(status: string, confidence: number): "open" | "unknown" | "closed" {
+export function displayedStatus(status: string, confidence: number): "open" | "unknown" | "closed" | "full" {
   if (status === "open" && confidence < 0.5) return "unknown";
   if (status === "open") return "open";
   if (status === "closed") return "closed";
+  // Task 6 check-in verdict: a "full" shelter is an affirmative report and shows as
+  // "full" (a brief never claims it as open — match filters status "open" only).
+  if (status === "full") return "full";
   return "unknown";
 }
 

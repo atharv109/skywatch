@@ -7,9 +7,10 @@ import type { Config } from "../config.ts";
 import { getDb } from "../db/client.ts";
 import { geocodeAddress } from "../ingest/geocode.ts";
 import { createInboundQueue } from "./queue.ts";
-import { fromPhoton, verifyPhotonSignature, type VerifyResult } from "./photon.ts";
+import { fromPhoton, verifyPhotonSignature, type InboundMessage, type VerifyResult } from "./photon.ts";
 import { processInbound, type InboundContext } from "./signup.ts";
 import { mongoDeliverStore, type DeliverStore } from "./store.ts";
+import { mongoStore } from "../store.ts";
 
 export type { InboundContext };
 
@@ -27,11 +28,12 @@ export function createInboundContext(config: Config): InboundContext {
     store: () => getDb(config).then(mongoDeliverStore),
     now: () => Date.now(),
     geocode: (address) => geocodeAddress(address),
+    appStore: () => getDb(config).then(mongoStore),
   };
 }
 
 export function createInboundRuntime(ctx: InboundContext): InboundRuntime {
-  const queue = createInboundQueue((msg) => processInbound(msg, ctx));
+  const queue = createInboundQueue<InboundMessage>((msg) => processInbound(msg, ctx));
   return {
     verify(rawBody, headers, now) {
       return verifyPhotonSignature({

@@ -12,6 +12,7 @@ import type { Point } from "../types/docs.ts";
 import { geocodeAddress, type GeocodeResult } from "../ingest/geocode.ts";
 import { FIXTURES_DIR } from "../ingest/fixtureio.ts";
 import type { InboundMessage } from "./photon.ts";
+import { chatReply } from "./chat.ts";
 import { sendOutbound, type SendContext } from "./send.ts";
 import type { UserRecord } from "./store.ts";
 
@@ -19,6 +20,12 @@ export interface InboundContext extends SendContext {
   /** Full config (the send path picks the Photon creds; the webhook needs the signing secret). */
   config: Config;
   geocode: (address: string) => Promise<GeocodeResult | null>;
+  /**
+   * Task 6 conversational tool loop: where DB-only resource/road reads come from.
+   * Optional (absent in older harnesses) — when missing, getBrief still works and
+   * the resource/road tools answer "unavailable".
+   */
+  appStore?: () => Promise<import("../store.ts").AppStore>;
 }
 
 /** Friendly-invalid-address retries before the prompt switches to ZIP-only. */
@@ -182,10 +189,26 @@ export async function processInbound(msg: InboundMessage, ctx: InboundContext): 
     case "asked-lang":
       await onLanguage(user, ctx, msg.text);
       return;
-    case "active":
-      // Conversational tool loop (getBrief / getRoadStatus / ...) is Task 6; hold the line.
-      await sendOutbound(ctx, user, REPLY.active);
+    case "active": {
+      // Conversational tool loop (Task 6): only when the conversation has a
+      // lastBrief (an alert already delivered to this user). Without one the
+      // hold-the-line reply stands — the SMS-gate interplay is unchanged.
+      const lastBrief = await store.lastBrief(user.id);
+      if (lastBrief) {
+        const chat = await chatReply({
+          config: ctx.config,
+          deliver: store,
+          appStore: (await ctx.appStore?.()) ?? null,
+          user,
+          text: msg.text,
+          lastBrief,
+        });
+        await sendOutbound(ctx, user, chat.reply);
+      } else {
+        await sendOutbound(ctx, user, REPLY.active);
+      }
       return;
+    }
   }
 }
 

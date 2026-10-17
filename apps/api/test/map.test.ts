@@ -6,6 +6,8 @@ import { memoryStore } from "../src/store.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import { seedScenarioBase } from "../src/ingest/scenario.ts";
 import { stubInboundRuntime } from "../src/deliver/runtime.ts";
+import { memoryVerifyStore } from "../src/verify/store.ts";
+import { stubVoiceRuntime } from "../src/deliver/voice_runtime.ts";
 import { emptyPipelineResult } from "../src/pipeline/run.ts";
 import { memoryMatchStore } from "../src/match/store.ts";
 import { memoryDeliverStore } from "../src/deliver/store.ts";
@@ -133,6 +135,8 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
       inbound: stubInboundRuntime(),
       match: async () => emptyMatchStore(),
       deliver: async () => throwAwayDeliverStore(),
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
     });
   }
 
@@ -157,6 +161,8 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
       inbound: stubInboundRuntime(),
       match: async () => emptyMatchStore(),
       deliver: async () => throwAwayDeliverStore(),
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
     });
     const res = await app.request("/map/state");
     expect(res.status).toBe(503);

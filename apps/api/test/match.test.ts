@@ -6,6 +6,8 @@ import { memoryDeliverStore, type DeliverStore, type UserRecord } from "../src/d
 import { memoryMatchStore, mongoMatchStore } from "../src/match/store.ts";
 import { runPipeline, type PipelineResult } from "../src/pipeline/run.ts";
 import { stubInboundRuntime } from "../src/deliver/runtime.ts";
+import { memoryVerifyStore } from "../src/verify/store.ts";
+import { stubVoiceRuntime } from "../src/deliver/voice_runtime.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import type { UserBrief } from "../src/types/brief.ts";
 
@@ -108,6 +110,8 @@ function harness(opts: { withRoad?: boolean; configEnv?: Record<string, string>;
       inbound: stubInboundRuntime(),
       match,
       deliver: async () => dstore,
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
     }),
     pipeline: () =>
       runPipeline({
@@ -115,7 +119,7 @@ function harness(opts: { withRoad?: boolean; configEnv?: Record<string, string>;
         store: astore,
         match,
         deliver: async () => dstore,
-        now: () => clock.value,
+      now: () => clock.value,
       }),
   };
 }
@@ -241,7 +245,24 @@ describe("no phone logging in new code", () => {
     const { readFile } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
     const dir = fileURLToPath(new URL("../src/", import.meta.url));
-    for (const file of ["pipeline/run.ts", "routes/tools.ts", "brief/build.ts", "brief/rules.ts", "match/store.ts"]) {
+    for (const file of [
+      "pipeline/run.ts",
+      "routes/tools.ts",
+      "brief/build.ts",
+      "brief/rules.ts",
+      "match/store.ts",
+      // Task 6 files (checkin/verify/roads/chat/voice log only static literals or err messages)
+      "verify/checkin.ts",
+      "verify/run.ts",
+      "verify/store.ts",
+      "verify/routes.ts",
+      "roads/check.ts",
+      "roads/adapter.ts",
+      "roads/routes.ts",
+      "deliver/chat.ts",
+      "deliver/voice.ts",
+      "deliver/voice_runtime.ts",
+    ]) {
       const text = await readFile(dir + file, "utf8");
       expect(text, file).not.toMatch(/console\.(log|info)\(/);
       for (const line of text.split("\n")) {

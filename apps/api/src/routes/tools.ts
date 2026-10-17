@@ -12,24 +12,22 @@ import type { UserRecord } from "../deliver/store.ts";
  *
  * Auth decision (demo-grade, documented for the task report + open to VEYZL comment):
  * when TOOL_SECRET is set both routes require a matching `X-Skywatch-Tool-Secret`
- * header; when it is unset they answer unauthenticated. A production pass would make
- * the secret mandatory.
+ * header (or `Authorization: Bearer <TOOL_SECRET>`); when it is unset they answer
+ * unauthenticated. A production pass would make the secret mandatory. The check
+ * itself lives in src/tools/auth.ts (shared with the Task 6 tool endpoints).
  *
  * Privacy: the byPhone lookup never logs or echoes the phone number (no console
  * output containing it, 404 bodies are a fixed sentence) and reads write no outbox
  * row — a brief fetch is not a delivery, so the rate gates are untouched.
  */
-
-const TOOL_SECRET_HEADER = "X-Skywatch-Tool-Secret";
+import { toolSecretDenied } from "../tools/auth.ts";
 
 export function toolRoutes(config: Config, deps: AppDeps): Hono {
   const app = new Hono();
 
-  // Shared-secret check: null = allow (either unset config or matching header).
-  const deniedFor = (headerValue: string | undefined) => {
-    if (!config.toolSecret) return null;
-    return headerValue === config.toolSecret ? null : true;
-  };
+  // Shared-secret check: null = allow (unset config or a matching header — the
+  // exact accepted header forms live in src/tools/auth.ts).
+  const deniedFor = (headers: Record<string, string | undefined>) => toolSecretDenied(config, headers);
 
   async function briefForUser(user: UserRecord | null, platform?: string): Promise<{ brief?: unknown; missing?: string }> {
     if (!user || (platform !== undefined && user.platform !== platform)) return { missing: "unknown user" };
@@ -40,7 +38,7 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
   }
 
   app.get("/brief/byPhone/:platform/:phone", async (c) => {
-    if (deniedFor(c.req.header(TOOL_SECRET_HEADER))) return c.json({ error: "missing or wrong tool secret" }, 401);
+    if (deniedFor(c.req.header())) return c.json({ error: "missing or wrong tool secret" }, 401);
     const platform = c.req.param("platform");
     if (platform !== "imessage" && platform !== "sms") {
       return c.json({ error: "unknown platform (use imessage|sms)" }, 404);
@@ -58,7 +56,7 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
   });
 
   app.get("/brief/:userId", async (c) => {
-    if (deniedFor(c.req.header(TOOL_SECRET_HEADER))) return c.json({ error: "missing or wrong tool secret" }, 401);
+    if (deniedFor(c.req.header())) return c.json({ error: "missing or wrong tool secret" }, 401);
     try {
       const deliver = await deps.deliver();
       const user = await deliver.getUserById(c.req.param("userId"));

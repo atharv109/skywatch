@@ -4,6 +4,8 @@ import { createApp } from "../src/server.ts";
 import { memoryStore, type AppStore } from "../src/store.ts";
 import { loadScenario, type LoadedScenario } from "../src/ingest/scenario.ts";
 import { stubInboundRuntime } from "../src/deliver/runtime.ts";
+import { memoryVerifyStore } from "../src/verify/store.ts";
+import { stubVoiceRuntime } from "../src/deliver/voice_runtime.ts";
 import { emptyPipelineResult } from "../src/pipeline/run.ts";
 import { memoryMatchStore } from "../src/match/store.ts";
 import { memoryDeliverStore } from "../src/deliver/store.ts";
@@ -19,6 +21,8 @@ function depsWith(store: AppStore, pipelineCalls?: { count: number }) {
     inbound: stubInboundRuntime(),
     match: async () => memoryMatchStore(store),
     deliver: async () => memoryDeliverStore(),
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
   };
 }
 
@@ -122,6 +126,8 @@ describe("POST /scenario/:id/replay", () => {
       inbound: stubInboundRuntime(),
       match: async () => memoryMatchStore(memoryStore()),
       deliver: async () => memoryDeliverStore(),
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
     });
     const res = await app.request("/scenario/smoke/replay", { method: "POST" });
     expect(res.status).toBe(503);

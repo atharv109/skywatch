@@ -16,6 +16,9 @@ export interface AppStore {
   listUserDots(): Promise<Array<[number, number]>>;
   /** Number of active users = brief count on the map ("briefCount"). */
   countUsers(): Promise<number>;
+  /** Single-doc reads for Task 6 (check-in / roads/check): null = not found. */
+  getResource(sourceId: string): Promise<ResourceDoc | null>;
+  getRoad(cameraId: string): Promise<RoadDoc | null>;
   upsertHazard(doc: HazardDoc): Promise<void>;
   upsertResource(doc: ResourceDoc): Promise<void>;
   upsertRoad(doc: RoadDoc): Promise<void>;
@@ -55,6 +58,12 @@ export function mongoStore(db: Db): AppStore {
     async countUsers() {
       return db.collection(COLLECTIONS.users).countDocuments();
     },
+    async getResource(sourceId) {
+      return db.collection<ResourceDoc>(COLLECTIONS.resources).findOne({ sourceId });
+    },
+    async getRoad(cameraId) {
+      return db.collection<RoadDoc>(COLLECTIONS.roads).findOne({ cameraId });
+    },
     upsertHazard(doc) {
       return mongoUpsertCol(db, COLLECTIONS.hazards, "sourceId", doc);
     },
@@ -87,6 +96,12 @@ export function memoryStore(): AppStore {
     },
     async countUsers() {
       return dots.length;
+    },
+    async getResource(sourceId) {
+      return resources.get(sourceId) ?? null;
+    },
+    async getRoad(cameraId) {
+      return roads.get(cameraId) ?? null;
     },
     upsertHazard(doc) {
       hazards.set(doc.sourceId, doc);

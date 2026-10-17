@@ -37,7 +37,22 @@ export interface HazardDoc {
 }
 
 export type ResourceKind = "shelter" | "pharmacy" | "community_center";
-export type ResourceStatus = "unknown" | "open" | "closed";
+/** "full" (Task 6 check-ins: at capacity — affirmative verdict, never claimed as "open" by a brief). */
+export type ResourceStatus = "unknown" | "open" | "closed" | "full";
+
+/**
+ * One entry in the resource's check-in history (Task 6: POST /tools/checkin keeps
+ * ONLY the latest — the map/dashboard reads resources, not a check-in collection).
+ */
+export interface CheckinNote {
+  status: ResourceStatus;
+  /** true when the dashboard/manual path made this check-in. */
+  manual: boolean;
+  /** Caller notes, truncated (privacy: must never carry a phone number). */
+  notes: string | null;
+  /** epoch ms */
+  at: number;
+}
 
 export interface ResourceDoc {
   /** Deterministic upsert key, e.g. "seed-shelter-1". */
@@ -51,6 +66,9 @@ export interface ResourceDoc {
   status: ResourceStatus;
   /** epoch ms of last verification, null = never verified. */
   verifiedAt: number | null;
+  /** Reported capacity at the last check-in (Task 6). */
+  capacity?: number | null;
+  lastCheckin?: CheckinNote;
   loc: Point;
 }
 

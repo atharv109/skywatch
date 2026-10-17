@@ -7,6 +7,8 @@ import { mongoDeliverStore } from "./deliver/store.ts";
 import { mongoMatchStore, type MatchStore } from "./match/store.ts";
 import { getDb } from "./db/client.ts";
 import { createInboundContext, createInboundRuntime, type InboundRuntime } from "./deliver/runtime.ts";
+import { createVoiceRuntime, type VoiceRuntime } from "./deliver/voice_runtime.ts";
+import { mongoVerifyStore, type VerifyStore } from "./verify/store.ts";
 
 /**
  * Injectable dependencies for the route groups. The defaults go to Mongo via the
@@ -23,6 +25,10 @@ export interface AppDeps {
   match: () => Promise<MatchStore>;
   /** Deliver-side users/conversations/outbox store (rate gates + consent re-read). */
   deliver: () => Promise<DeliverStore>;
+  /** Task 6 voice check-in queue records (verify_requests). */
+  verify: () => Promise<VerifyStore>;
+  /** Task 6 ElevenLabs post-call webhook runtime (signature verify + queue). */
+  voice: VoiceRuntime;
 }
 
 export function defaultDeps(config: Config): AppDeps {
@@ -32,7 +38,9 @@ export function defaultDeps(config: Config): AppDeps {
     inbound: createInboundRuntime(createInboundContext(config)),
     match: () => getDb(config).then(mongoMatchStore),
     deliver: () => getDb(config).then(mongoDeliverStore),
+    verify: () => getDb(config).then(mongoVerifyStore),
+    voice: createVoiceRuntime(config),
   };
 }
 
-export type { PipelineCtx, PipelineResult };
+export type { PipelineCtx, PipelineResult, VerifyStore };

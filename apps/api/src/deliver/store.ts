@@ -98,6 +98,14 @@ export interface DeliverStore {
   /** Newest alert outbox row for userId+rateKey with createdAt >= since (rate gate lookup). */
   lastOutboxAlert(userId: string, rateKey: string, since: number): Promise<OutboxRecord | null>;
   /**
+   * The user's current brief (Task 6 conversational gate + getBrief tool): the
+   * `meta.brief` of the newest alert outbox row that carries one. Null = the
+   * pipeline has not briefed this user (hold-the-line reply, never the tool loop).
+   */
+  lastBrief(userId: string): Promise<UserBrief | null>;
+  /** Last `limit` conversation turns for a user, oldest-first (chat history). */
+  recentConversation(userId: string, limit: number): Promise<ConversationEntry[]>;
+  /**
    * Users the match pipeline briefs: active signup state, consent granted (both
    * flags), and a resolved location. Task 4 pipeline + per-user brief matching.
    */
@@ -128,6 +136,15 @@ function docToUser(doc: Record<string, unknown>): UserRecord {
     langConfirmPending: doc["langConfirmPending"] === true,
     createdAt: Number(doc["createdAt"]),
     updatedAt: Number(doc["updatedAt"]),
+  };
+}
+
+function docToConversation(doc: Record<string, unknown>): ConversationEntry {
+  return {
+    userId: String(doc["userId"]),
+    from: doc["from"] as "user" | "bot",
+    text: String(doc["text"]),
+    at: Number(doc["at"]),
   };
 }
 
@@ -203,18 +220,31 @@ export function mongoDeliverStore(db: Db): DeliverStore {
       );
       return doc ? docToRecord(doc) : null;
     },
+    async lastBrief(userId) {
+      const doc = await outbox.findOne(
+        { userId, kind: "alert", "meta": { $exists: true, $ne: null }, "meta.brief": { $exists: true, $ne: null } },
+        { sort: { createdAt: -1 } },
+      );
+      const brief = doc ? docToRecord(doc).meta?.brief : null;
+      return (brief as UserBrief | undefined) ?? null;
+    },
+    async recentConversation(userId, limit) {
+      const docs = await convos
+        .find({ userId })
+        .sort({ at: -1, _id: -1 })
+        .limit(limit)
+        .toArray();
+      return docs
+        .map(docToConversation)
+        .reverse();
+    },
     async listOutbox() {
       const docs = await outbox.find().toArray();
       return docs.map(docToRecord);
     },
     async listConversations() {
       const docs = await convos.find().toArray();
-      return docs.map((doc) => ({
-        userId: String(doc["userId"]),
-        from: doc["from"] as "user" | "bot",
-        text: String(doc["text"]),
-        at: Number(doc["at"]),
-      }));
+      return docs.map(docToConversation);
     },
     async listBriefableUsers() {
       const docs = await users
@@ -265,6 +295,19 @@ export function memoryDeliverStore(): DeliverStore {
         }
       }
       return best;
+    },
+    async lastBrief(userId) {
+      let best: OutboxRecord | null = null;
+      for (const record of sent) {
+        if (record.userId === userId && record.kind === "alert" && record.meta?.brief) {
+          if (!best || record.createdAt > best.createdAt) best = record;
+        }
+      }
+      return best?.meta?.brief ?? null;
+    },
+    async recentConversation(userId, limit) {
+      const mine = convos.filter((entry) => entry.userId === userId);
+      return mine.slice(Math.max(0, mine.length - limit));
     },
     async listOutbox() {
       return [...sent];

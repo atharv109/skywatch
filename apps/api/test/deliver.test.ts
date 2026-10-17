@@ -7,7 +7,9 @@ import { memoryMatchStore } from "../src/match/store.ts";
 import { emptyPipelineResult } from "../src/pipeline/run.ts";
 import { memoryDeliverStore, type DeliverStore, type UserRecord } from "../src/deliver/store.ts";
 import { createInboundRuntime, type InboundRuntime } from "../src/deliver/runtime.ts";
+import { stubVoiceRuntime } from "../src/deliver/voice_runtime.ts";
 import { deliverAlert, isAlertBlocked, ALERT_WINDOW_MS, type SendContext } from "../src/deliver/send.ts";
+import { memoryVerifyStore } from "../src/verify/store.ts";
 import {
   fromPhoton,
   verifyPhotonSignature,
@@ -61,6 +63,8 @@ function makeHarness(geocode?: (address: string) => Promise<GeocodeResult | null
     inbound,
     match: async () => memoryMatchStore(memoryStore()),
     deliver: async () => dstore,
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
   });
   const post: Harness["post"] = async (payload, opts = {}) => {
     const raw = JSON.stringify(payload);
