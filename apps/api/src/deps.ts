@@ -9,6 +9,7 @@ import { getDb } from "./db/client.ts";
 import { createInboundContext, createInboundRuntime, type InboundRuntime } from "./deliver/runtime.ts";
 import { createVoiceRuntime, type VoiceRuntime } from "./deliver/voice_runtime.ts";
 import { mongoVerifyStore, type VerifyStore } from "./verify/store.ts";
+import { mongoMeshStore, type MeshStore } from "./mesh/store.ts";
 
 /**
  * Injectable dependencies for the route groups. The defaults go to Mongo via the
@@ -29,6 +30,13 @@ export interface AppDeps {
   verify: () => Promise<VerifyStore>;
   /** Task 6 ElevenLabs post-call webhook runtime (signature verify + queue). */
   voice: VoiceRuntime;
+  /**
+   * Task 8 mesh store (mesh_packets / beacons / mesh_devices). OPTIONAL on the
+   * interface so every landed hermetic harness stays untouched — routes read a
+   * missing mesh dep as "mesh not configured" (503); the production defaultDeps
+   * always wires it.
+   */
+  mesh?: () => Promise<MeshStore>;
 }
 
 export function defaultDeps(config: Config): AppDeps {
@@ -40,6 +48,7 @@ export function defaultDeps(config: Config): AppDeps {
     deliver: () => getDb(config).then(mongoDeliverStore),
     verify: () => getDb(config).then(mongoVerifyStore),
     voice: createVoiceRuntime(config),
+    mesh: () => getDb(config).then(mongoMeshStore),
   };
 }
 

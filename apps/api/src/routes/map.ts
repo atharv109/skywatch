@@ -3,6 +3,7 @@ import { streamSSE } from "hono/streaming";
 import type { Config } from "../config.ts";
 import type { AppDeps } from "../deps.ts";
 import { assembleMapState, type MapState } from "../map/state.ts";
+import { assembleMeshState } from "../mesh/state.ts";
 
 const REFRESH_MS = 5_000;
 
@@ -12,6 +13,11 @@ const REFRESH_MS = 5_000;
  * 5 s. The loop is driven by `stream.sleep()` inside Hono's streaming helper: no
  * setInterval, so nothing holds the Node event loop or a timer hostage — the loop
  * simply ends when the client disconnects (`stream.aborted`).
+ *
+ * Task 8 (mesh): the assembled state carries an optional `mesh` section — the
+ * dark-zone layer — present ONLY when at least one mesh packet exists. The
+ * appearance of the section is data-driven, never config-gated (the REPLAY
+ * decision for the mesh endpoints lives in src/mesh/routes.ts).
  */
 export function mapRoutes(config: Config, deps: AppDeps): Hono {
   const app = new Hono();
@@ -25,7 +31,13 @@ export function mapRoutes(config: Config, deps: AppDeps): Hono {
       store.listUserDots(),
       store.countUsers(),
     ]);
-    return assembleMapState({ hazards, resources, roads, dots, userCount });
+    const state = assembleMapState({ hazards, resources, roads, dots, userCount });
+    if (deps.mesh) {
+      const meshState = await assembleMeshState(await deps.mesh(), Date.now());
+      // One key, data-gated: zero packets = the zone is absent from the map.
+      if (meshState.counts.packets > 0) state.mesh = meshState;
+    }
+    return state;
   }
 
   app.get("/state", async (c) => {

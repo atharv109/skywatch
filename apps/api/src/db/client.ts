@@ -16,6 +16,12 @@ export const COLLECTIONS = {
   outbox: "outbox",
   /** Task 6 voice check-in queue records (Delivery consumes them). */
   verifyRequests: "verify_requests",
+  /** Task 8 Offline Mode (mesh) collections. */
+  meshPackets: "mesh_packets",
+  /** Clustered rescue beacons (one doc per same-kind cluster within 100 m). */
+  beacons: "beacons",
+  /** Pinned device pubkeys (first-packet TOFU registration). */
+  meshDevices: "mesh_devices",
 } as const;
 
 let client: MongoClient | null = null;
@@ -97,5 +103,19 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // so a re-run of /verify/run never duplicates a pending request.
   await db.collection(COLLECTIONS.verifyRequests).createIndexes([
     { key: { requestId: 1 }, name: "requestId_1", unique: true },
+  ]);
+  // Task 8 (mesh): packet id is the dedup key (idempotent gateway retries — the
+  // duplicate insert from a lost race is the dedup signal); beacon clusters are
+  // found server-side by the 2dsphere index (same-kind within 100 m) and clusterId
+  // is unique per created cluster; device pinning must stay one-doc-per-device.
+  await db.collection(COLLECTIONS.meshPackets).createIndexes([
+    { key: { id: 1 }, name: "id_1", unique: true },
+  ]);
+  await db.collection(COLLECTIONS.beacons).createIndexes([
+    { key: { loc: "2dsphere" }, name: "loc_2dsphere" },
+    { key: { clusterId: 1 }, name: "clusterId_1", unique: true },
+  ]);
+  await db.collection(COLLECTIONS.meshDevices).createIndexes([
+    { key: { deviceId: 1 }, name: "deviceId_1", unique: true },
   ]);
 }

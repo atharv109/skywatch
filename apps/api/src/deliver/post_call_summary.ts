@@ -21,6 +21,8 @@
  * TEMPLATES verbatim — those may not be extracted (fallback exports TEMPLATES
  * but its header/strings/logic stay untouched); if an emergency line is ever
  * corrected there, mirror the change here. Each file's header comments the other.
+ * (Task 8 cross-ref: the mesh downlink ack table src/mesh/downlink.ts imports the
+ * emergency strings from brief/fallback.ts / brief/build.ts rather than mirroring.)
  */
 import type { Lang, UserBrief } from "../types/brief.ts";
 import { TEMPLATES as FALLBACK_TEMPLATES } from "../brief/fallback.ts";

@@ -1,4 +1,5 @@
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../types/docs.ts";
+import type { MeshState } from "../mesh/types.ts";
 
 /**
  * GET /map/state payload. Privacy (Global Constraint 7): this shape is checked against
@@ -8,6 +9,8 @@ import type { HazardDoc, ResourceDoc, RoadDoc } from "../types/docs.ts";
 
 export interface MapState {
   generatedAt: number;
+  /** Task 8 dark-zone layer, present ONLY when at least one mesh packet exists (assembled by src/mesh/state.ts). */
+  mesh?: MeshState;
   hazards: Array<{
     sourceId: string;
     type: string;

@@ -7,11 +7,12 @@ import { webhookRoutes } from "./webhooks.ts";
 import { toolRoutes } from "./tools.ts";
 import { checkinToolRoutes, verifyRunRoutes } from "../verify/routes.ts";
 import { roadRoutes } from "../roads/routes.ts";
+import { meshRoutes } from "../mesh/routes.ts";
 
 /**
  * Route groups: scenario replay (Task 2), map state/stream (Task 2),
  * webhooks (Task 3 + Task 6 voice post-call), tool brief endpoints (Task 4),
- * check-in/verify tools (Task 6), roads check (Task 6).
+ * check-in/verify tools (Task 6), roads check (Task 6), mesh (Task 8).
  */
 export function routes(config: Config, deps: AppDeps = defaultDeps(config)): Hono {
   const app = new Hono();
@@ -22,5 +23,6 @@ export function routes(config: Config, deps: AppDeps = defaultDeps(config)): Hon
   app.route("/tools", checkinToolRoutes(config, deps));
   app.route("/verify", verifyRunRoutes(config, deps));
   app.route("/roads", roadRoutes(config, deps));
+  app.route("/mesh", meshRoutes(config, deps));
   return app;
 }

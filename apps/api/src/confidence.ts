@@ -5,11 +5,13 @@
  * Task 6 (`POST /tools/checkin`, `POST /roads/check`) MUST import from here instead
  * of re-deriving a half-life; map/state already does.
  */
-export type ConfidenceKind = "shelter" | "road";
+export type ConfidenceKind = "shelter" | "road" | "mesh";
 
 export const halfLifeMinutes: Record<ConfidenceKind, number> = {
   shelter: 30,
   road: 15,
+  /** Task 8 mesh packets: 30-min half-life, same formula as shelters (base score stored at sync, decay composed at read). */
+  mesh: 30,
 };
 
 /** 1.0 at verification, halved every kind-specific half-life, floored at 0. */
