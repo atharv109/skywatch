@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import type { Db } from "mongodb";
 import { loadConfig, type Config } from "../src/config.ts";
 import { COLLECTIONS, closeDb, getDb } from "../src/db/client.ts";
@@ -14,7 +14,7 @@ import { emptyPipelineResult } from "../src/pipeline/run.ts";
 import { memoryMeshStore } from "../src/mesh/store.ts";
 import { assembleMeshState } from "../src/mesh/state.ts";
 import { sigMessage } from "../src/mesh/sig.ts";
-import { ackMessage, MESH_ACK_LINES } from "../src/mesh/downlink.ts";
+import { ackMessage, buildDownlink, MESH_ACK_LINES } from "../src/mesh/downlink.ts";
 import type { MeshPacketIn } from "../src/mesh/types.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import type { Lang } from "../src/types/brief.ts";
@@ -164,6 +164,7 @@ interface SyncBody {
   inserted: number;
   deduped: number;
   rejected: number;
+  rejectedIds: string[];
   scored: number;
   unscored: number;
   bundle: {
@@ -172,10 +173,16 @@ interface SyncBody {
     nearestVerifiedShelter: { name: string; status: string; confidence: number } | null;
     blockedRoads: Array<{ cameraId: string; status: string }>;
     acks: Array<{ beaconClusterId: string; message: string }>;
+    messages: Array<{ id: string; from: string; to: string | null; text: string; ts: number; hops: number }>;
   };
 }
 
 const GW = "mesh-test-gateway";
+
+// Same scheme as src/mesh/state.ts: first 10 hex chars of sha256(deviceId) — a msg
+// packet's `to` (direct routing) is addressed in exactly these units.
+const deviceHash = (deviceId: string): string =>
+  createHash("sha256").update(deviceId).digest("hex").slice(0, 10);
 
 describe("POST /mesh/sync (Task 8, hermetic)", () => {
   it("pins the pubkey on the first packet, verifies, and scores +0.2 inside an active hazard zone", async () => {
@@ -402,6 +409,169 @@ describe("POST /mesh/sync (Task 8, hermetic)", () => {
       expect(msg.length).toBeGreaterThan(MESH_ACK_LINES[lang]!.length);
     }
     expect(ackMessage("es")).toContain("911");
+  });
+});
+
+describe("Task 8b: msg packets (mesh chat) + messages/resources read surfaces", () => {
+  it("broadcast msg end-to-end: synced, preserved verbatim, never scored, carried on /mesh/state + bundle, and contributes neither a cluster nor a coverage dot", async () => {
+    const h = harness();
+    const signer = makeSigner("mesh-test-msg-device-1");
+    const text = "streets flooding near 4th — heading to the library shelter";
+    const res = await syncPackets(h, GW, 47.6, -122.33, [
+      packet(signer, { id: "mesh-test-msg-broadcast-1", type: "msg", status: text }),
+    ]);
+    const body = (await res.json()) as SyncBody;
+    expect(body.inserted).toBe(1);
+    expect(body.scored).toBe(0);
+    expect(body.unscored).toBe(1);
+    expect(body.bundle.messages.map((m) => m.id)).toContain("mesh-test-msg-broadcast-1");
+
+    const stored = (await h.meshStore.listPackets()).find((p) => p.type === "msg")!;
+    expect(stored.status).toBe(text); // verbatim
+    expect(stored.score).toBeNull();
+    expect(stored.to).toBeNull(); // broadcast
+    expect(stored.reasons).toContain("not scored (relay packet type)");
+    // transport, not facts: no rescue cluster, no coverage dot, not a hazard report
+    expect(await h.meshStore.listBeacons()).toHaveLength(0);
+
+    const stateRes = await h.app.request("/mesh/state");
+    expect(stateRes.status).toBe(200);
+    const state = (await stateRes.json()) as {
+      messages: Array<{ id: string; from: string; to: string | null; text: string; ts: number; hops: number }>;
+      resources: unknown[];
+      hazardReports: unknown[];
+      coverage: unknown[];
+      counts: { packets: number; devices: number };
+    };
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toEqual({
+      id: stored.id,
+      from: deviceHash("mesh-test-msg-device-1"),
+      to: null,
+      text,
+      ts: NOW - 60_000,
+      hops: 0,
+    });
+    expect(state.resources).toEqual([]); // no ResourceDocs seeded in this harness
+    expect(state.hazardReports).toHaveLength(0);
+    expect(state.coverage).toHaveLength(0);
+    expect(state.counts).toMatchObject({ packets: 1, devices: 0 });
+  });
+
+  it("direct `to` routing + bundle relevance: addressed-to-gateway rides from anywhere, other targets and distant broadcasts do not; msgs never decay", async () => {
+    const h = harness();
+    const signer = makeSigner("mesh-test-msg-device-2");
+    const gwHash = deviceHash(GW);
+    const far = { lat: 47.85, lon: -122.1 }; // ~28 km from the gateway
+    const res = await syncPackets(h, GW, 47.6, -122.33, [
+      packet(signer, { type: "msg", status: "direct to gateway", ts: NOW - 40_000, ...far, to: gwHash }),
+      packet(signer, { type: "msg", status: "direct to someone else", ts: NOW - 30_000, to: deviceHash("mesh-test-someone-else") }),
+      packet(signer, { type: "msg", status: "broadcast far away", ts: NOW - 20_000, ...far }),
+      packet(signer, { type: "msg", status: "broadcast nearby", ts: NOW - 10_000 }),
+    ]);
+    const body = (await res.json()) as SyncBody;
+    expect(body.inserted).toBe(4);
+    // direct-to-gateway (any distance) + nearby broadcasts, newest first
+    expect(body.bundle.messages.map((m) => m.text)).toEqual([
+      "broadcast nearby",
+      "direct to gateway",
+    ]);
+    // /mesh/state stays unfiltered — all four, newest-first by ts, with hashes only
+    const state = await assembleMeshState(h.meshStore, NOW);
+    expect(state.messages.map((m) => m.from)).toEqual(Array.from({ length: 4 }, () => deviceHash("mesh-test-msg-device-2")));
+    expect(JSON.stringify(state)).not.toContain("mesh-test-msg-device-2");
+    expect(state.messages.map((m) => m.to)).toEqual([null, null, deviceHash("mesh-test-someone-else"), gwHash]);
+
+    // Msgs are INERT to decay: 90 min later the message views are byte-identical
+    // (no score key at all) — unlike hazard reports, whose score fades (see the
+    // Task 8 decay test).
+    const later = await assembleMeshState(h.meshStore, NOW + 90 * 60_000);
+    expect(later.messages.map((m) => m.text)).toEqual(["broadcast nearby", "broadcast far away", "direct to someone else", "direct to gateway"]);
+    for (const m of later.messages) {
+      expect(Object.keys(m).sort()).toEqual(["from", "hops", "id", "text", "to", "ts"]);
+    }
+  });
+
+  it("280-char cap: 280 preserved verbatim; 281 / empty / non-string / bad `to` are shape-broken (rejected, id echoed)", async () => {
+    const h = harness();
+    const signer = makeSigner("mesh-test-msg-device-3");
+    const max = "x".repeat(280);
+    const over = "x".repeat(281);
+    const seq0 = seq;
+    const res = await syncPackets(h, GW, 47.6, -122.33, [
+      packet(signer, { id: `mesh-test-msg-cap-ok-${seq0 + 1}`, type: "msg", status: max }),
+      packet(signer, { id: `mesh-test-msg-cap-over-${seq0 + 2}`, type: "msg", status: over }),
+      packet(signer, { id: `mesh-test-msg-cap-empty-${seq0 + 3}`, type: "msg", status: "" }),
+      packet(signer, { id: `mesh-test-msg-cap-nonstr-${seq0 + 4}`, type: "msg", status: 42 as unknown as string }),
+      packet(signer, { id: `mesh-test-msg-cap-badto-${seq0 + 5}`, type: "msg", status: "hi", to: 123 as unknown as string }),
+    ]);
+    const body = (await res.json()) as SyncBody;
+    expect(body.inserted).toBe(1);
+    expect(body.rejected).toBe(4);
+    const stored = (await h.meshStore.listPackets()).find((p) => p.type === "msg")!;
+    expect(stored.status).toBe(max); // NOT the 200-slice the other types get
+    expect(body.rejectedIds).toContain(`mesh-test-msg-cap-over-${seq0 + 2}`);
+  });
+
+  it("resources on /mesh/state + the /map/state mesh section follow the displayedStatus + confidence semantics (verified-open shows open, stale shows unknown)", async () => {
+    const stale = NOW - 6 * 30 * 60_000; // 6 shelter half-lives -> confidence ~0.016
+    const h = harness({
+      resources: [
+        shelter({ sourceId: "mesh-test-res-fresh", verifiedAt: NOW }),
+        shelter({ sourceId: "mesh-test-res-stale-open", verifiedAt: stale }),
+        shelter({ sourceId: "mesh-test-res-closed", status: "closed", verifiedAt: stale }),
+      ],
+    });
+    const signer = makeSigner("mesh-test-msg-device-4");
+    await syncPackets(h, GW, 47.6, -122.33, [packet(signer, { type: "msg", status: "shelters open?" })]);
+
+    const stateRes = await h.app.request("/mesh/state");
+    const state = (await stateRes.json()) as {
+      generatedAt: number;
+      beacons: unknown[];
+      hazardReports: unknown[];
+      coverage: unknown[];
+      counts: unknown;
+      messages: unknown[];
+      resources: Array<{ sourceId: string; kind: string; name: string; status: string; lat: number; lon: number }>;
+    };
+    const bySource = Object.fromEntries(state.resources.map((r) => [r.sourceId, r]));
+    expect(bySource["mesh-test-res-fresh"]).toEqual({
+      sourceId: "mesh-test-res-fresh",
+      kind: "shelter",
+      name: "Test Shelter",
+      status: "open",
+      lat: 47.601,
+      lon: -122.331,
+    });
+    expect(bySource["mesh-test-res-stale-open"]?.status).toBe("unknown");
+    expect(bySource["mesh-test-res-closed"]?.status).toBe("closed");
+
+    // Additive-shape regression: every pre-8b key is still present and untouched.
+    for (const key of ["generatedAt", "beacons", "hazardReports", "coverage", "counts"]) {
+      expect(state).toHaveProperty(key);
+    }
+    expect(state.messages).toHaveLength(1);
+
+    // The same resources ride /map/state's data-gated mesh section.
+    const map = (await (await h.app.request("/map/state")).json()) as {
+      mesh?: { resources: Array<{ sourceId: string; status: string }>; messages: Array<{ text: string }> };
+    };
+    expect(map.mesh?.resources.find((r) => r.sourceId === "mesh-test-res-stale-open")?.status).toBe("unknown");
+    expect(map.mesh?.resources.find((r) => r.sourceId === "mesh-test-res-fresh")?.status).toBe("open");
+    expect(map.mesh?.messages.map((m) => m.text)).toContain("shelters open?");
+  });
+
+  it("buildDownlink accepts the device lang (optional param, default en): ack lines come from the per-language table; new messages key is additive", async () => {
+    const h = harness();
+    const signer = makeSigner(GW); // the gateway itself trapped -> contributes the cluster -> 1 ack
+    await syncPackets(h, GW, 47.6, -122.33, [packet(signer, { deviceId: GW })]);
+    const gatewayGeo = { deviceId: GW, lat: 47.6, lon: -122.33 };
+    const es = await buildDownlink(h.meshStore, memoryMatchStore(h.astore), gatewayGeo, NOW, "es");
+    expect(es.acks[0]!.message).toBe(ackMessage("es"));
+    const enDefault = await buildDownlink(h.meshStore, memoryMatchStore(h.astore), gatewayGeo, NOW);
+    expect(enDefault.acks[0]!.message).toBe(ackMessage("en"));
+    expect(enDefault.messages).toEqual([]); // additive key, present even with no msgs
   });
 });
 

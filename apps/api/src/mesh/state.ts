@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { confidenceFor } from "../confidence.ts";
-import type { MeshBeaconDoc, MeshPacketDoc, MeshState } from "./types.ts";
+import type { ResourceDoc } from "../types/docs.ts";
+import type { MeshBeaconDoc, MeshMessageView, MeshPacketDoc, MeshState } from "./types.ts";
 import type { MeshStore } from "./store.ts";
 
 /**
@@ -12,11 +13,17 @@ import type { MeshStore } from "./store.ts";
  * prefix of the deviceId plus a ~1 km rounded location. Beacon clusters are ranked
  * by priority (rescue kinds are NEVER decayed or downgraded); hazard reports carry
  * the stored sync-time score composed with the 30-min read-time decay.
+ *
+ * Task 8b additions: `messages` (mesh chat, transport not facts — never scored,
+ * never decayed, deviceId hashed on both ends) and `resources` (the dashboard's
+ * resource pins with map-display status semantics, so node maps show
+ * verified-open shelters the same way /map/state does).
  */
 export const MESH_DECAY_KIND = "mesh" as const;
 
-/// Stable coverage-dot id: first 10 hex chars of sha256(deviceId).
-function hashPrefix(deviceId: string): string {
+/// Stable coverage-dot id: first 10 hex chars of sha256(deviceId). Also the deviceId
+/// hash the msg type routes direct messages by (`to` === hashPrefix(deviceHash-owner)).
+export function hashPrefix(deviceId: string): string {
   return createHash("sha256").update(deviceId).digest("hex").slice(0, 10);
 }
 
@@ -32,14 +39,43 @@ export function rankBeacons(clusters: MeshBeaconDoc[]): MeshBeaconDoc[] {
   );
 }
 
-/** The stable coverage dot for one stored packet (its device's position; invalid-sig packets contribute nothing). */
+/**
+ * The stable coverage dot for one stored packet (its device's position; invalid-sig
+ * packets contribute nothing). Task 8b: `msg` packets add NO dots — a chat message
+ * may originate from a device whose beacon/hazard report already covers it, and a
+ * message is not a position-fact-bearing report; the dot set stays beacon|hazard.
+ */
 function coverageDot(p: MeshPacketDoc): MeshState["coverage"][number] | null {
   if (p.type !== "beacon" && p.type !== "hazard") return null;
   if (p.verify === "mismatch" || p.verify === "invalid") return null;
   return { id: hashPrefix(p.deviceId), ...anonymize(p.lon, p.lat) };
 }
 
-export async function assembleMeshState(store: MeshStore, now: number): Promise<MeshState> {
+/**
+ * MIRROR NOTE (displayedStatus — same convention as downlink.ts's per-language ack
+ * table): byte-for-byte mirror of map/state.ts's displayedStatus, kept HERE because
+ * this file must not depend back on map/state.ts (map/state imports this module's
+ * shape). map/state.ts remains the display-rule source of truth a corrected rule
+ * flows from — keep the two in lockstep (cross-ref both sites).
+ */
+function displayedStatus(status: string, confidence: number): "open" | "unknown" | "closed" | "full" {
+  if (status === "open" && confidence < 0.5) return "unknown";
+  if (status === "open") return "open";
+  if (status === "closed") return "closed";
+  if (status === "full") return "full";
+  return "unknown";
+}
+
+/** The read view of one msg packet (shared by /mesh/state and the downlink bundle). */
+export function messageView(p: MeshPacketDoc): MeshMessageView {
+  return { id: p.id, from: hashPrefix(p.deviceId), to: p.to, text: p.status, ts: p.ts, hops: p.hops };
+}
+
+export async function assembleMeshState(
+  store: MeshStore,
+  now: number,
+  resources: ResourceDoc[] = [],
+): Promise<MeshState> {
   const [packets, clusters] = await Promise.all([store.listPackets(), store.listBeacons()]);
 
   const beacons = rankBeacons(clusters).map((b) => ({
@@ -83,11 +119,35 @@ export async function assembleMeshState(store: MeshStore, now: number): Promise<
   }
   const coverage = [...latest.values()].map(coverageDot) as MeshState["coverage"];
 
+  // Task 8b mesh chat: newest 50 by device ts (the thread order the node pages
+  // render), type "msg" only — acks/briefs/reports never surface as a message.
+  const messages = packets
+    .filter((p) => p.type === "msg")
+    .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
+    .slice(0, 50)
+    .map(messageView);
+
+  // Task 8b resource pins: same compose as /map/state's resources (all non-road
+  // resources ride the shelter half-life; displayedStatus applies read-time).
+  const resourcePins = resources.map((r) => {
+    const confidence = confidenceFor("shelter", r.verifiedAt, now);
+    return {
+      sourceId: r.sourceId,
+      kind: r.kind,
+      name: r.name,
+      status: displayedStatus(r.status, confidence),
+      lat: r.loc.coordinates[1],
+      lon: r.loc.coordinates[0],
+    };
+  });
+
   return {
     generatedAt: now,
     beacons,
     hazardReports,
     coverage,
+    messages,
+    resources: resourcePins,
     counts: {
       packets: packets.length,
       beacons: clusters.length,

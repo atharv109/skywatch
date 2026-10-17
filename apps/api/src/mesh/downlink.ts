@@ -1,7 +1,9 @@
 import { buildUserBrief, EMERGENCY_LINE } from "../brief/build.ts";
 import { fallbackRender, TEMPLATES } from "../brief/fallback.ts";
+import { haversineKm } from "../match/geo.ts";
 import type { MatchStore } from "../match/store.ts";
 import type { Lang } from "../types/brief.ts";
+import { hashPrefix, messageView } from "./state.ts";
 import type { MeshStore } from "./store.ts";
 import type { DownlinkBundle } from "./types.ts";
 
@@ -14,7 +16,18 @@ import type { DownlinkBundle } from "./types.ts";
  * Task 5 validator is not required here (nothing to fence), but the template rule
  * is equally binding: bundle strings can never name a place/road/number that is
  * not a brief field or the ack/911 templates.
+ *
+ * Task 8b addition: `messages` — the newest MESH_MSG_BUNDLE_CAP mesh chat packets
+ * relevant to this gateway (direct `to` its deviceId hash, or broadcast within
+ * MESH_MSG_BUNDLE_RADIUS_KM of its position). The template rule binds only
+ * SERVER-COMPOSED strings: message `text` is USER text, transported verbatim,
+ * never composed or rendered here.
  */
+
+/** Task 8b: how far from the gateway a broadcast message must be to ride its bundle. */
+export const MESH_MSG_BUNDLE_RADIUS_KM = 5;
+/** Task 8b: bundle message cap (newest first). */
+export const MESH_MSG_BUNDLE_CAP = 20;
 
 /**
  * Per-language ack skeletons — MIRROR NOTE (911-string pattern, same convention the
@@ -40,37 +53,58 @@ export function ackMessage(lang: Lang = "en"): string {
 }
 
 /**
- * The bundle for one gateway: the template-rendered brief at its lat/lon (lang "en"
- * — decision recorded in the task report: the locked packet format carries no lang
- * field, so the device language is unknown; when the frontend adds one, pass it
- * here), the shelter/blockedRoads verbatim from that brief (the locked field
- * semantics: shelter null unless verified-open, roads max 2 fresh non-clear), and
- * acks for every beacon cluster the requesting device contributed to (acks are set
- * on the cluster — first ack wins — so the dashboard shows the acknowledged state).
+ * The bundle for one gateway: the template-rendered brief at its lat/lon, the
+ * shelter/blockedRoads verbatim from that brief (the locked field semantics:
+ * shelter null unless verified-open, roads max 2 fresh non-clear), acks for every
+ * beacon cluster the requesting device contributed to (acks are set on the cluster
+ * — first ack wins — so the dashboard shows the acknowledged state), and the newest
+ * mesh messages addressed to/broadcast around the gateway (Task 8b).
+ *
+ * Language: `lang` is an optional param, default "en" — the locked packet format
+ * carries no lang field, so the gateway must pass the device language explicitly
+ * when the frontend adds one (ack strings come from the per-language table; no
+ * language detection is done here).
  */
 export async function buildDownlink(
   store: MeshStore,
   match: MatchStore,
   gateway: { deviceId: string; lat: number; lon: number },
   now: number,
+  lang: Lang = "en",
 ): Promise<DownlinkBundle> {
   const brief = await buildUserBrief(
     match,
-    { id: "mesh-gateway", lang: "en", loc: { type: "Point", coordinates: [gateway.lon, gateway.lat] } },
+    { id: "mesh-gateway", lang, loc: { type: "Point", coordinates: [gateway.lon, gateway.lat] } },
     now,
   );
   const clusters = await store.listBeacons();
   const acks = [] as DownlinkBundle["acks"];
   for (const cluster of clusters) {
     if (!cluster.sources.includes(gateway.deviceId)) continue;
-    acks.push({ beaconClusterId: cluster.clusterId, message: ackMessage("en") });
+    acks.push({ beaconClusterId: cluster.clusterId, message: ackMessage(lang) });
     if (cluster.ackedAt === null) await store.ackBeacon(cluster.clusterId, now);
   }
+  // Task 8b messages: newest cap 20 — direct `to` the gateway's hash (anywhere), or
+  // broadcast messages within the radius of the gateway's position.
+  const gatewayHash = hashPrefix(gateway.deviceId);
+  const packets = await store.listPackets();
+  const messages = packets
+    .filter((p) => p.type === "msg")
+    .filter(
+      (p) =>
+        p.to === gatewayHash ||
+        (p.to === null &&
+          haversineKm([gateway.lon, gateway.lat], [p.lon, p.lat]) <= MESH_MSG_BUNDLE_RADIUS_KM),
+    )
+    .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
+    .slice(0, MESH_MSG_BUNDLE_CAP)
+    .map(messageView);
   return {
     generatedAt: now,
     brief: fallbackRender(brief),
     nearestVerifiedShelter: brief.shelter,
     blockedRoads: brief.blockedRoads,
     acks,
+    messages,
   };
 }

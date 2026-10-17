@@ -54,7 +54,10 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
   app.get("/state", async (c) => {
     try {
       const store = await meshStore(deps);
-      return c.json(await assembleMeshState(store, Date.now()));
+      // Task 8b: resource pins (shelters etc.) come from the main app store — the
+      // exact ResourceDocs /map/state serves, so node maps match the dashboard.
+      const resources = await (await deps.store(config)).listResources();
+      return c.json(await assembleMeshState(store, Date.now(), resources));
     } catch (err) {
       if (err instanceof SyncError) {
         return c.json({ error: err.message }, err.status);

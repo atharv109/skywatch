@@ -33,7 +33,8 @@ export function mapRoutes(config: Config, deps: AppDeps): Hono {
     ]);
     const state = assembleMapState({ hazards, resources, roads, dots, userCount });
     if (deps.mesh) {
-      const meshState = await assembleMeshState(await deps.mesh(), Date.now());
+      // The same resources ride the mesh section's Task 8b `resources` pins.
+      const meshState = await assembleMeshState(await deps.mesh(), Date.now(), resources);
       // One key, data-gated: zero packets = the zone is absent from the map.
       if (meshState.counts.packets > 0) state.mesh = meshState;
     }

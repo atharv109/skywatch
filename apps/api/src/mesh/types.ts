@@ -10,8 +10,11 @@
 import type { BlockedRoad, ShelterBrief } from "../types/brief.ts";
 import type { Point } from "../types/docs.ts";
 
-export const MESH_PACKET_TYPES = ["beacon", "hazard", "ack", "brief"] as const;
+export const MESH_PACKET_TYPES = ["beacon", "hazard", "ack", "brief", "msg"] as const;
 export type MeshPacketType = (typeof MESH_PACKET_TYPES)[number];
+
+/** User chat text over the mesh (Task 8b): the free-text cap on a msg packet's `status`. */
+export const MESH_MSG_STATUS_MAX = 280;
 
 /** Canonical normalized rescue kinds (the packet's raw `status` is normalized at the door). */
 export const RESCUE_KINDS = ["Trapped", "Injured", "Need Rescue"] as const;
@@ -41,6 +44,8 @@ export interface MeshPacketIn {
   pubkey?: unknown;
   /** legacy:true = the device could not sign (no WebCrypto Ed25519) — stored UNVERIFIED, scored with an "unsigned device" reason, never clustered. */
   legacy?: unknown;
+  /** Task 8b (msg only): null/absent = broadcast to the mesh; a string = direct message to that deviceId hash. */
+  to?: unknown;
 }
 
 /** Shape-validated packet (normalizePacket in sync.ts). */
@@ -61,6 +66,8 @@ export interface ParsedPacket {
   sig: string | null;
   pubkey: string | null;
   legacy: boolean;
+  /** Task 8b (msg only): destination deviceId hash, null = broadcast (always null for the other types). */
+  to: string | null;
 }
 
 export type VerifyState = "ok" | "unsigned" | "mismatch" | "invalid";
@@ -87,6 +94,8 @@ export interface MeshPacketDoc {
   scoredAt: number;
   reasons: string[];
   receivedAt: number;
+  /** Task 8b (msg only): destination deviceId hash, null = broadcast. */
+  to: string | null;
 }
 
 /** One mesh device (mesh_devices; unique index on deviceId). First-packet TOFU pinning. */
@@ -120,6 +129,22 @@ export interface MeshBeaconDoc {
 }
 
 /** GET /mesh/state + the /map/state optional `mesh` section (dark-zone dashboard layer). */
+
+/**
+ * Task 8b: one mesh chat message as READ (never raw deviceId — `from`/`to` are the
+ * same sha256 deviceId-hash prefixes that anonymize coverage dots; the `text` is the
+ * original msg packet's status, preserved verbatim). Transport, not facts: rendered
+ * nowhere server-side, never scored, never decayed.
+ */
+export interface MeshMessageView {
+  id: string;
+  from: string;
+  to: string | null;
+  text: string;
+  ts: number;
+  hops: number;
+}
+
 export interface MeshState {
   generatedAt: number;
   /** Clusters ranked by priority, then most recently seen (priority > score for beacons). */
@@ -148,6 +173,17 @@ export interface MeshState {
   }>;
   /** Anonymized coverage dots: deviceId hashed to a stable prefix + rounded location. */
   coverage: Array<{ id: string; lat: number; lon: number }>;
+  /** Task 8b: mesh chat, newest 50 (type "msg" only — beacons/acks/briefs are never a message). */
+  messages: MeshMessageView[];
+  /** Task 8b: resource pins (shelters etc.) with the map-display status semantics (+ read-time confidence), so node maps show verified-open shelters. */
+  resources: Array<{
+    sourceId: string;
+    kind: string;
+    name: string;
+    status: "open" | "unknown" | "closed" | "full";
+    lat: number;
+    lon: number;
+  }>;
   counts: { packets: number; beacons: number; devices: number; acked: number };
 }
 
@@ -162,4 +198,6 @@ export interface DownlinkBundle {
   blockedRoads: BlockedRoad[];
   /** Ack packets for clusters this device contributed beacons to. */
   acks: Array<{ beaconClusterId: string; message: string }>;
+  /** Task 8b: newest 20 mesh messages addressed to the gateway's hash or broadcast within its area — user text passed through verbatim (the template rule binds only server-COMPOSED strings). */
+  messages: MeshMessageView[];
 }

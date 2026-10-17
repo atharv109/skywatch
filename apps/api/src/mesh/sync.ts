@@ -8,6 +8,7 @@ import { scoreUplink } from "./score.ts";
 import { sigMessage, verifySig } from "./sig.ts";
 import type { MeshStore } from "./store.ts";
 import {
+  MESH_MSG_STATUS_MAX,
   RESCUE_PRIORITY,
   type MeshBeaconDoc,
   type MeshPacketDoc,
@@ -29,6 +30,10 @@ import type { DownlinkBundle } from "./types.ts";
  *   5. rescue-beacon clustering for verified beacons (same normalized kind within
  *      100 m merges; unsigned packets never create rescue clusters/acks).
  * Then the downlink bundle for the gateway (downlink.ts) rides the response.
+ *
+ * Task 8b (mesh chat): `msg` packets ride steps 1-3 + dedup exactly like the other
+ * types and are scored by nothing, clustered into nothing, and decayed by nothing —
+ * they are transport, not facts (state.ts/downlink.ts expose them as `messages`).
  */
 
 export const MAX_BATCH = 200;
@@ -67,8 +72,8 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
     return fail("id must be a string of 1..128 chars");
   }
   const type = raw.type;
-  if (type !== "beacon" && type !== "hazard" && type !== "ack" && type !== "brief") {
-    return fail("type must be one of: beacon|hazard|ack|brief");
+  if (type !== "beacon" && type !== "hazard" && type !== "ack" && type !== "brief" && type !== "msg") {
+    return fail("type must be one of: beacon|hazard|ack|brief|msg");
   }
   if (!isFiniteNum(raw.lat) || raw.lat < -90 || raw.lat > 90) return fail("lat must be a finite number in -90..90");
   if (!isFiniteNum(raw.lon) || raw.lon < -180 || raw.lon > 180) return fail("lon must be a finite number in -180..180");
@@ -78,7 +83,28 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
   }
   if (raw.hops !== undefined && (!isFiniteNum(raw.hops) || raw.hops < 0)) return fail("hops must be a number >= 0");
   if (raw.ttl !== undefined && (!isFiniteNum(raw.ttl) || raw.ttl <= 0)) return fail("ttl must be a number > 0");
-  const status = typeof raw.status === "string" ? raw.status.slice(0, 200) : "";
+  let status: string;
+  let to: string | null = null;
+  if (type === "msg") {
+    // Task 8b mesh chat: the text rides the status field, preserved VERBATIM up to
+    // MESH_MSG_STATUS_MAX — a longer/absent/non-string text is shape-broken
+    // (rejected, only counted) rather than truncated, unlike the other types'
+    // 200-slice status.
+    if (typeof raw.status !== "string" || raw.status.length === 0 || raw.status.length > MESH_MSG_STATUS_MAX) {
+      return fail(`msg status (the message text) must be a string of 1..${MESH_MSG_STATUS_MAX} chars`);
+    }
+    status = raw.status;
+    // to null/absent = broadcast to the mesh; a string = direct message carrying the
+    // destination deviceId hash (the same hash prefix that anonymizes coverage dots).
+    if (raw.to !== undefined && raw.to !== null) {
+      if (typeof raw.to !== "string" || raw.to.length === 0 || raw.to.length > 128) {
+        return fail("msg to must be null (broadcast) or a deviceId hash string of 1..128 chars");
+      }
+      to = raw.to;
+    }
+  } else {
+    status = typeof raw.status === "string" ? raw.status.slice(0, 200) : "";
+  }
   const packet: ParsedPacket = {
     id,
     type,
@@ -94,6 +120,7 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
     sig: typeof raw.sig === "string" && raw.sig.length > 0 ? raw.sig : null,
     pubkey: typeof raw.pubkey === "string" && raw.pubkey.length > 0 ? raw.pubkey : null,
     legacy: raw.legacy === true,
+    to,
   };
   return { ok: true, packet };
 }
@@ -160,6 +187,7 @@ function packetDoc(packet: ParsedPacket, verify: VerifyResult, score: number | n
     scoredAt: now,
     reasons,
     receivedAt: now,
+    to: packet.to,
   };
 }
 
