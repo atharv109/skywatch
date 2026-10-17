@@ -252,6 +252,87 @@ describe("fallbackRender (pre-translated safety floor)", () => {
   });
 });
 
+describe("fix round 1: context-bound number claims", () => {
+  it("b1: capacity-like claims reject even when the digit itself is a brief value (severity 3)", () => {
+    const brief = briefFixture(); // severity 3, so bare "3" is allowlisted
+    const bad = { text: "The shelter has beds for 3 families; Call 911.", voiceScript: "x" };
+    const verdict = validateRendered(bad, brief);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.violations.some((v) => v.detail.includes("capacity claim"))).toBe(true);
+    const bad2 = { text: "Shelter capacity: 3 beds available now.", voiceScript: "x" };
+    expect(validateRendered(bad2, brief).ok).toBe(false);
+  });
+
+  it("b5/b6: time-ago claims must equal verifiedMinutesAgo; other units reject", () => {
+    const brief = briefFixture(); // verifiedMinutesAgo: 10
+    const wrong = { text: "The shelter was verified 3 minutes ago. Call 911.", voiceScript: "x" };
+    expect(validateRendered(wrong, brief).ok).toBe(false);
+    const right = { text: "The shelter was verified 10 minutes ago. Call 911.", voiceScript: "x" };
+    expect(validateRendered(right, brief).ok).toBe(true);
+    const shelterless = validateRendered({ text: "A shelter was checked 2 hours ago. Call 911.", voiceScript: "x" }, briefFixture({ shelter: null }));
+    expect(shelterless.ok).toBe(false);
+    expect(validateRendered({ text: "Verified 2 days ago. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+  });
+
+  it("b4: distance unit swap (miles/meters) always rejects; km must equal distanceKm", () => {
+    const brief = briefFixture(); // distanceKm 1.2
+    expect(validateRendered({ text: "Test Shelter is 1.2 miles away. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    expect(validateRendered({ text: "Test Shelter is 200 meters away. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    expect(validateRendered({ text: "Test Shelter is 2 km away. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    expect(validateRendered({ text: "Test Shelter is 1.2 km away (that is 0.75 miles). Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    expect(validateRendered({ text: "Test Shelter is 1.2 km away. Call 911.", voiceScript: "x" }, brief).ok).toBe(true);
+    expect(validateRendered({ text: "A shelter is 3 公里 away.", voiceScript: "x" }, briefFixture({ lang: "zh" })).ok).toBe(false);
+  });
+
+  it("b7: milepost digits must trace to an entity name, not any brief number", () => {
+    const brief = briefFixture(); // names carry 99 (SR 99 demo) and 9800 (cam-9800), not 26
+    expect(validateRendered({ text: "Flooding near MP 26 on the blocked road. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    expect(validateRendered({ text: "Flooding near milepost 99 on the blocked road. Call 911.", voiceScript: "x" }, brief).ok).toBe(true);
+  });
+
+  it("severity digits bind to real brief severities; bare non-context digits keep the allowlist", () => {
+    const brief = briefFixture(); // severities: [3]
+    expect(validateRendered({ text: "Smoke at level 2 is near you. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    expect(validateRendered({ text: "Smoke at level 3 is near you. Call 911.", voiceScript: "x" }, brief).ok).toBe(true);
+    expect(validateRendered({ text: "Smoke at severity of 1 is near you. Call 911.", voiceScript: "x" }, brief).ok).toBe(false);
+    // bare digit without a capacity/time/distance/severity context: allowlist as before
+    expect(validateRendered({ text: "Bring 3 things and Call 911.", voiceScript: "x" }, brief).ok).toBe(true);
+  });
+});
+
+describe("fix round 1: leading non-brief capitalized token before an allowed name (b16)", () => {
+  const briefI5 = briefFixture({
+    blockedRoads: [
+      { cameraId: "cam-i5", name: "I-5", status: "flooded", confidence: 0.8 },
+      { cameraId: "cam-9800", name: "SR 99 demo", status: "flooded", confidence: 0.9 },
+    ],
+  });
+
+  it("command-verb + allowed road name passes", () => {
+    for (const text of [
+      "Avoid I-5 tonight. Call 911 if you are in danger.",
+      "Take SR 99 instead. Call 911 if you are in danger.",
+      "Use I-5, not the flooded road. Call 911 if you are in danger.",
+    ]) {
+      expect(validateRendered({ text, voiceScript: "x" }, briefI5).ok, text).toBe(true);
+    }
+  });
+
+  it("multi-word invented names still reject, with or without a leading command word", () => {
+    for (const text of [
+      "Evacuate to Garfield High School now.",
+      "Visit Rainier Center immediately.",
+      "Go to West Seattle High School for shelter.",
+    ] ) {
+      const verdict = validateRendered({ text, voiceScript: "x" }, briefI5);
+      expect(verdict.ok, text).toBe(false);
+      expect(hasEntityViolation(verdict), text).toBe(true);
+    }
+    // two words where the trailing word is not in any brief phrase either
+    expect(validateRendered({ text: "Check Martin Way before driving. Call 911.", voiceScript: "x" }, briefI5).ok).toBe(false);
+  });
+});
+
 describe("renderAlert (after-commit gates)", () => {
   it("REPLAY=1 and unset key both use the fallback template with zero network calls", async () => {
     const spy = vi.fn();

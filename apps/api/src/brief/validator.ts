@@ -83,6 +83,89 @@ function allowedNumbers(brief: UserBrief): Set<string> {
   return numberTokens(sources.map((s) => JSON.stringify(s)).join(" "));
 }
 
+/** Digit runs found inside the brief's entity-name strings only (shelter/road names, camera ids, titles). */
+function allowedNameNumbers(brief: UserBrief): Set<string> {
+  const names = [
+    brief.shelter?.name ?? "",
+    ...brief.blockedRoads.flatMap((r) => [r.name, r.cameraId]),
+    ...brief.hazards.map((h) => h.title),
+  ];
+  return numberTokens(names.join(" "));
+}
+
+/*
+ * Context-bound number claims (fix round 1): a digit the bare allowlist happens
+ * to contain is still a hallucination when the phrase around it names a quantity
+ * the brief does not carry. Capacity-like phrases bind to nothing (the locked
+ * brief has no capacity field — every such claim rejects); time-ago phrases bind
+ * to verifiedMinutesAgo; distance phrases bind to shelter.distanceKm and only in
+ * metric units ("miles never"); severity digits bind to actual hazard severities;
+ * milepost digits bind to entity-name digits. Bare digits with none of these
+ * contexts keep the plain presence-anywhere allowlist.
+ */
+const CAPACITY_RES: RegExp[] = [
+  /(\d+(?:\.\d+)?)\s*[-–]?\s*(?:people|persons?|beds?|cots?|seats?|spots?|families?|personas|camas|tao|người|أشخاص|أسرّة|床位)/giu,
+  /(?:\b(?:capacity|capacidad|sức\s*chứa)\b[^.!?\n\d]{0,12})(\d+(?:\.\d+)?)/giu,
+  /(\d+(?:\.\d+)?)\s*人/gu,
+];
+const KM_RE = /(\d+(?:\.\d+)?)\s*(?:kilometers?|kilometres?|kilometros?|km\b|公里|كم)/giu;
+const BAD_DISTANCE_UNIT_RE =
+  /(\d+(?:\.\d+)?)\s*(?:miles?\b|mi\b|meters?\b|metres?\b|feet\b|foot\b|yards?\b|英里|英尺|أميال|أقدام|dặm\b|milya\b)/giu;
+const MINUTES_AGO_RE = /(\d+)\s*(?:minutes?|mins?)\s*ago/giu;
+const HOURS_AGO_RE = /(\d+)\s*(?:hours?|hrs?)\s*ago/giu;
+const DAYS_AGO_RE = /(\d+)\s*(?:days?|weeks?)\s*ago/giu;
+const SEVERITY_RE = /(?:\blevel\b|\bseverity\b)\s*(?:of\s*)?(\d+)/giu;
+const MILEPOST_RE = /(?:\bMP\b|\bmilepost\b)\s*\.?\s*(\d+)/giu;
+
+function roughlyEquals(raw: string, value: number | undefined): boolean {
+  return value !== undefined && Number.isFinite(Number(raw)) && Math.abs(Number(raw) - value) < 1e-9;
+}
+
+function numberContextViolations(section: string, brief: UserBrief): Violation[] {
+  const violations: Violation[] = [];
+  const shelter = brief.shelter;
+  const push = (detail: string) => violations.push({ kind: "entity", detail });
+
+  // Capacity-like claims: the locked brief carries no capacity value at all.
+  for (const re of CAPACITY_RES) {
+    for (const m of section.matchAll(re)) push(`capacity claim "${m[0].trim()}" — the brief carries no capacity value`);
+  }
+  // Distances: non-metric units are always inventions (unit swap), km must equal distanceKm.
+  for (const m of section.matchAll(BAD_DISTANCE_UNIT_RE)) push(`distance "${m[0].trim()}" uses a unit the brief has no value for`);
+  for (const m of section.matchAll(KM_RE)) {
+    if (!roughlyEquals(m[1]!, shelter?.distanceKm)) {
+      push(`distance "${m[0].trim()}" is not the brief's shelter distance`);
+    }
+  }
+  // Time-ago claims: bound to verifiedMinutesAgo (hours scaled); any other unit rejects.
+  for (const m of section.matchAll(DAYS_AGO_RE)) push(`staleness claim "${m[0].trim()}" is not a brief value`);
+  for (const m of section.matchAll(MINUTES_AGO_RE)) {
+    if (!roughlyEquals(m[1]!, shelter?.verifiedMinutesAgo)) {
+      push(`staleness claim "${m[0].trim()}" does not match verifiedMinutesAgo`);
+    }
+  }
+  for (const m of section.matchAll(HOURS_AGO_RE)) {
+    if (!roughlyEquals(String(Number(m[1]) * 60), shelter?.verifiedMinutesAgo)) {
+      push(`staleness claim "${m[0].trim()}" does not match verifiedMinutesAgo`);
+    }
+  }
+  // Severity digits: only in hazard-context phrases, and only real brief severities.
+  const severities = brief.hazards.map((h) => h.severity);
+  for (const m of section.matchAll(SEVERITY_RE)) {
+    if (!severities.includes(Number(m[1]))) {
+      push(`severity claim "${m[0].trim()}" is not a brief severity`);
+    }
+  }
+  // Milepost digits must come from an entity name / camera id, not severity etc.
+  const nameNumbers = allowedNameNumbers(brief);
+  for (const m of section.matchAll(MILEPOST_RE)) {
+    if (!nameNumbers.has(m[1]!)) {
+      push(`milepost claim "${m[0].trim()}" is not a brief entity value`);
+    }
+  }
+  return violations;
+}
+
 /** Maximal runs of capitalized tokens per clause ("Martin Luther King Jr Way", "SR 99"). */
 function properEntityRuns(text: string): string[] {
   const isCapital = (t: string) => /^\p{Lu}/u.test(t) && /\p{L}/u.test(t);
@@ -117,6 +200,11 @@ function properEntityRuns(text: string): string[] {
  * case-insensitive). Windowing (not whole-run matching) stops one invented name
  * hiding inside a list of real ones, and stops two adjacent real names fusing
  * into a false violation.
+ *
+ * Fix round 1 (b16): before judging a failed window, ONE leading non-brief
+ * capitalized token is stripped — "Avoid I-5" / "Take SR 99" (command verb +
+ * allowed name) must not reject, while multi-word invented names keep failing
+ * because their remaining windows still mismatch.
  */
 function nameViolations(text: string, brief: UserBrief): Violation[] {
   const allowed = [
@@ -128,6 +216,10 @@ function nameViolations(text: string, brief: UserBrief): Violation[] {
   ]
     .filter((s) => s.length > 0)
     .map((s) => s.toLowerCase());
+  const windowInBrief = (tokens: string[]): boolean => {
+    const phrase = tokens.join(" ").toLowerCase();
+    return allowed.some((name) => name === phrase || name.includes(phrase));
+  };
   const violations: Violation[] = [];
   for (const run of properEntityRuns(text)) {
     const segments: string[][] = [];
@@ -148,10 +240,11 @@ function nameViolations(text: string, brief: UserBrief): Violation[] {
       const words = seg.filter((t) => !/^\d/.test(t));
       for (let size = 2; size <= Math.min(MAX_NAME_WINDOW, words.length); size++) {
         for (let start = 0; start + size <= words.length; start++) {
-          const window = words.slice(start, start + size).join(" ").toLowerCase();
-          if (!allowed.some((name) => name === window || name.includes(window))) {
-            return true;
-          }
+          const window = words.slice(start, start + size);
+          if (windowInBrief(window)) continue;
+          // strip ONE leading non-brief capitalized token ("Avoid", "Take", "Use")
+          if (windowInBrief(window.slice(1))) continue;
+          return true;
         }
       }
       return false;
@@ -186,6 +279,7 @@ export function validateRendered(candidate: GeminiRender, brief: UserBrief): Val
         violations.push({ kind: "entity", detail: `numbers: "${token}" is not a brief value` });
       }
     }
+    violations.push(...numberContextViolations(section, brief));
     violations.push(...nameViolations(section, brief));
   }
   return { ok: violations.length === 0, violations };
