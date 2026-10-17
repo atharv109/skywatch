@@ -1,0 +1,22 @@
+{
+  "name": "skywatch",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "apps/vision"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p apps/api",
+    "dev": "npm run dev -w @skywatch/api",
+    "start": "npm run start -w @skywatch/api"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
