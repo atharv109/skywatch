@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "build": "npm run build --workspaces",
     "typecheck": "tsc --noEmit -p apps/api",
     "dev": "npm run dev -w @skywatch/api",
     "start": "npm run start -w @skywatch/api"

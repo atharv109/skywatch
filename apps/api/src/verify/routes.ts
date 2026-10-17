@@ -4,6 +4,7 @@ import type { AppDeps } from "../deps.ts";
 import { toolSecretDenied } from "../tools/auth.ts";
 import { applyCheckin, CheckinError, CHECKIN_STATUSES, type CheckinBody } from "../verify/checkin.ts";
 import { createVerifyRuns } from "../verify/run.ts";
+import { buildStatusEvent, forwardStatusEvents } from "../verify/tiger.ts";
 
 /**
  * Task 6 tool endpoints (shared-secret scheme: src/tools/auth.ts — checked only
@@ -40,6 +41,10 @@ export function checkinToolRoutes(config: Config, deps: AppDeps): Hono {
         { ...body, resourceId: body.resourceId, status: body.status as CheckinBody["status"] },
         Date.now(),
       );
+      // Optional Tiger Data mirror (Task 7): fire-and-forget, inert when
+      // TIGER_DATABASE_URL is unset; a mirror failure must never fail the check-in.
+      const tigerEvent = buildStatusEvent(result.resource);
+      if (tigerEvent) forwardStatusEvents(config, [tigerEvent]);
       const deliver = await deps.deliver();
       if (result.note && body.userId) {
         const user = await deliver.getUserById(String(body.userId));

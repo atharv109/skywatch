@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: skywatch-api
+    runtime: node
+    plan: free
+    branch: main
+    autoDeploy: true
+    # Build: install deps + typecheck-as-build (module imports use .ts
+    # extensions + tsconfig noEmit, so the deploy start path is `node --import
+    # tsx` over src — no emitted dist to keep in sync).
+    buildCommand: npm ci && npm run build --workspaces
+    startCommand: npm run start -w @skywatch/api
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Demo runs the replay/fixture path (see README verify-before-demo).
+      - key: REPLAY
+        value: "1"
+      # Secrets — set in the Render dashboard, never synced from git.
+      - key: MONGODB_URI
+        sync: false
+      - key: TOOL_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AIRNOW_API_KEY
+        sync: false
+      - key: WSDOT_ACCESS_CODE
+        sync: false
+      - key: PERCEPTRON_API_KEY
+        sync: false
+      - key: PHOTON_PROJECT_ID
+        sync: false
+      - key: PHOTON_PROJECT_SECRET
+        sync: false
+      - key: PHOTON_WEBHOOK_SIGNING_SECRET
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_AGENT_ID_BRIEF
+        sync: false
+      - key: ELEVENLABS_AGENT_ID_CHECKIN
+        sync: false
+      - key: ELEVENLABS_VOICE_WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: TIGER_DATABASE_URL
+        sync: false
