@@ -117,3 +117,26 @@ Throwaway db `skywatch-task7-run` used for all runs, restored after (dropped).
 5. `ELEVENLABS_API_KEY` genuinely has no backend code path (backend never
    calls the ElevenLabs API by design); it is in the table so Delivery knows
    it is still required to run their agents.
+---
+
+## Fix round 1 (post-review, single commit, not pushed)
+
+Addressed C1 (critical, deploy-blocking) + README minors 1-2 from review; scope guard respected (minors 3-5 ledgered for coordination, not touched).
+
+- **C1:** Render sets `NODE_ENV=production` on Node runtimes, so plain `npm ci` omits devDependencies, leaving both `tsc` (build gate) and `tsx` (start `node --import tsx src/index.ts`) absent. Fixed with both requested belts:
+  (a) `tsx@^4.20.6` moved from root devDependencies into `@skywatch/api` dependencies (typescript intentionally stays a build-only dep);
+  (b) `render.yaml` buildCommand is now `npm ci --include=dev && npm run build --workspaces` (with an explanatory comment).
+- **Deploy-shaped boot proof (fresh install):**
+```text
+$ rm -rf node_modules
+$ NODE_ENV=production npm ci --no-audit --include=dev        # success; lockfile synced first to the moved tsx
+$ node -e "require.resolve('tsx')"   -> C:\...\skywatch\node_modules\tsx\dist\loader.mjs  (tsx + typescript present)
+$ NODE_ENV=production REPLAY=1 MONGODB_URI="mongodb://127.0.0.1:27017/skywatch-task7-run" PORT=3334 npm run start -w @skywatch/api
+> node --import tsx src/index.ts
+$ curl http://localhost:3334/health  -> {"ok":true}
+$ smoke -> 5/5 PASS
+```
+- **README minors:** PUBLIC_BASE_URL row now says to set the onrender.com URL after first deploy and redeploy; verify-before-demo gained the free-tier sleep note (~15 min idle, ~50 s cold start; keep-alive via open dashboard tab or manual dashboard resume ~1 min before demo) as item 9; Tiger note renumbered to 10.
+- **Re-verification after fix:** gated suite 159/159 (16 files, MONGODB_URI to local mongod, throwaway db `skywatch-task7-run`, dropped after); smoke 5/5 PASS on the NODE_ENV=production boot; typecheck/build unchanged and clean.
+- **Ledgered (not mine):** minor 3 (smoke step-5 record behavior), minor 4 (tiger per-checkin pg connection lifetime), minor 5 (untracked apps/api/.env.example still left alone).
+- **Correction to the timeline above:** the first fresh `npm ci --include=dev` ran against a not-yet-updated lockfile (npm accepted it); the lockfile was then regenerated with `npm install --package-lock-only` after the commit and the commit amended to include it (`npm ci --dry-run` now reports manifests in sync). The boot proof above used the freshly installed tree from that first ci — the tree content is identical to what the regenerated lock installs (same tsx, no version change).

@@ -60,7 +60,7 @@ Copy `.env.example` to `.env` (root, gitignored). Secrets never land in git and 
 | `ELEVENLABS_AGENT_ID_BRIEF` | Identifies which calls come FROM the Brief caller in the post-call webhook | delivery | Render env + the ElevenLabs dashboard (agent config pointing at `PUBLIC_BASE_URL/tools/brief/...`) | post-call calls can't be labeled as brief-caller |
 | `ELEVENLABS_AGENT_ID_CHECKIN` | Stamped onto `verify_requests`; post-call outcome routing matches on it | delivery | Render env + ElevenLabs dashboard (Check-in agent; consumes `GET /tools/checkin/next`) | check-in outcomes can't be routed back to the right request |
 | `ELEVENLABS_VOICE_WEBHOOK_SECRET` | `elevenlabs-signature` HMAC on `/webhooks/voice/post-call` | delivery | Render env + ElevenLabs webhook settings | **fail-closed: post-call webhooks rejected 401** — outcomes lost |
-| `PUBLIC_BASE_URL` | Canonical URL of the deployment for agents to point their tools at | backend | Render env (defaults `http://localhost:PORT`) | only defaults to localhost; agent dashboards should be set explicitly |
+| `PUBLIC_BASE_URL` | Canonical URL of the deployment for agents to point their tools at | backend | Render env (defaults `http://localhost:PORT`) | After the first Render deploy set it to the service's `onrender.com` URL and redeploy; agent dashboards should use it explicitly |
 | `REPLAY` | `1` = every feed reads committed fixtures + renders via fallback templates (the demo path); `0` = live feeds + live Gemini | backend | Render env, `1` for the demo | `REPLAY=1` is the only proven path; `0` hits live feeds |
 | `PORT` | HTTP listener port (Render injects its own) | backend | Render env | defaults 3000 |
 | `TOOL_SECRET` | Shared secret for `/tools/*`, `/verify/run`, `/roads/check` (`X-Skywatch-Tool-Secret:` or `Authorization: Bearer`) | backend | Render env; the same value goes to the ElevenLabs agent tool configs | unset = endpoints accept **unauthenticated writes** (demo-grade decision; a boot-log warning fires). Set before exposing. |
@@ -95,6 +95,7 @@ REPLAY=1 pinned in render.yaml; every secret var is `sync: false` (set in the da
 6. `ELEVENLABS_VOICE_WEBHOOK_SECRET` set on both sides - post-call outcomes must land in conversations.
 7. `REPLAY=1` on the API service; a `POST /scenario/smoke/replay` just before the demo refreshes the fixture snapshot.
 8. GEMINI deliberately NOT exercised here — `REPLAY=1` yields fallback templates by design (set `REPLAY=0` + `GEMINI_API_KEY` only when the live render path is wanted).
-9. `TIGER_DATABASE_URL` either unset (no-op, no demo impact) or set with its table reachable; check-ins must never wait on it (fire-and-forget is verified by design).
+9. Render free tier sleeps after ~15 min idle (~50 s cold start): keep the dashboard tab open for keep-alive, or resume the service from the dashboard about a minute before the demo.
+10. `TIGER_DATABASE_URL` either unset (no-op, no demo impact) or set with its table reachable; check-ins must never wait on it (fire-and-forget is verified by design).
 
 Note on `TOOL_SECRET`: when it is unset, the tool endpoints (`/tools/*`, `/verify/run`, `/roads/check`) accept **unauthenticated writes** — that is a demo-grade decision, the boot log warns about it, and it must be set before the API is exposed.

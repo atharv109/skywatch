@@ -5,10 +5,11 @@ services:
     plan: free
     branch: main
     autoDeploy: true
-    # Build: install deps + typecheck-as-build (module imports use .ts
-    # extensions + tsconfig noEmit, so the deploy start path is `node --import
-    # tsx` over src — no emitted dist to keep in sync).
-    buildCommand: npm ci && npm run build --workspaces
+    # Build: --include=dev is required even though Render sets NODE_ENV=production
+    # (npm ci would otherwise omit devDependencies, dropping typescript for the
+    # build gate); tsx itself moved into @skywatch/api dependencies as the second
+    # belt for the `node --import tsx` start path.
+    buildCommand: npm ci --include=dev && npm run build --workspaces
     startCommand: npm run start -w @skywatch/api
     healthCheckPath: /health
     envVars:
