@@ -35,6 +35,10 @@ Screenshots: `map-ui-home-brief.png` (personalized), `map-ui-home-area.png` (are
 
 Known gap (api-side): the map link the backend composes is `PUBLIC_BASE_URL + "/b/" + userId` — a static dir-serve answers `/b/<id>` with a 404 before any shim can run. The api repo needs one route (`app.get("/b/:id")` serving b.html's bytes / a rewrite) for text map links to land on the page; until then the page is reachable at `/b.html?id=<id>`.
 
+## Follow-up 4 — resume a real SMS signup (pushed)
+
+Step 0 of onboarding now carries an **"Already signed up over SMS?"** card: phone input (+ E.164, tolerates a country-code-less 10-digit entry) + Continue → `POST /demo/brief {phone}` (Task 8h contract) → on success the profile becomes `{phone, platform:"sms", lang, userId, onboarded}` (+ cfg.userId), the brief from the live record renders straight to Home with the toast "Resuming your real signup — brief from Skywatch's live record."; 404 → "That phone isn't signed up yet — do the quick signup below" (normal flow continues); 403 (gate off) / no-signal → honest inline messages; button shows "Checking…" while in flight. Step-0 stuck-feel: Continue now reads "Say hi and continue", every step re-renders with a `.ob-step` entrance animation and scrolls the onboarding sheet to top. Verified headless (mocked contract-shape responses): 404 / success→Home-with-brief / 403 / label+scroll-reset all asserted; SW `sw-v6`; pushed `931b07f`.
+
 ## What shipped (original build)
 
 ### 1. Offline tile pack (committed, no network at demo time)
