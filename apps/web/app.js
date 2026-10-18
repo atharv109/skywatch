@@ -1191,9 +1191,11 @@
    * =======================================================================*/
   /* Tiles come only from the committed local pack (apps/web/tiles, mirrored into
    * the SW precache) — no network tile fetches ever happen, demo-safe offline.
-   * PACK below is the manifest of what's committed (z14 downtown 4x3 + z13
-   * context 2x2, Esri World Dark Gray raster). Views outside the pack render
-   * the base fill + pin/hazard glyphs on the plain backdrop. */
+   * PACK below is the manifest of what's committed (z13 full Seattle bbox
+   * 5x6, z14 downtown/eastside 7x8, z15 Capitol Hill/First Hill 3x3 — Esri
+   * World Dark Gray raster). Pan/zoom clamp to the pack bounds, so no
+   * black-void scrolling is possible; the empty-state backdrop is a subtle
+   * dot grid. */
 
   const canvas = $("#mapCanvas");
   let ctx = null;
@@ -1202,19 +1204,30 @@
 
   /* tile pack manifest (must match apps/web/tiles on disk) */
   const PACK = {
-    minZ: 13, maxZ: 14,
+    minZ: 13, maxZ: 15,
   };
   const TILE_SIZE = 256;
-  const tileKeys = new Set([
-    // z14 fine grid (downtown Seattle 4x3)
-    "14/2623/5721", "14/2624/5721", "14/2625/5721", "14/2626/5721",
-    "14/2623/5722", "14/2624/5722", "14/2625/5722", "14/2626/5722",
-    "14/2623/5723", "14/2624/5723", "14/2625/5723", "14/2626/5723",
-    // z13 coarse context (2x2)
-    "13/1312/2861", "13/1313/2861", "13/1312/2862", "13/1313/2862",
+    const tileKeys = new Set([
+    "13/1310/2858", "13/1311/2858", "13/1312/2858", "13/1313/2858", "13/1314/2858",
+    "13/1310/2859", "13/1311/2859", "13/1312/2859", "13/1313/2859", "13/1314/2859",
+    "13/1310/2860", "13/1311/2860", "13/1312/2860", "13/1313/2860", "13/1314/2860",
+    "13/1310/2861", "13/1311/2861", "13/1312/2861", "13/1313/2861", "13/1314/2861",
+    "13/1310/2862", "13/1311/2862", "13/1312/2862", "13/1313/2862", "13/1314/2862",
+    "13/1310/2863", "13/1311/2863", "13/1312/2863", "13/1313/2863", "13/1314/2863",
+    "14/2620/5716", "14/2621/5716", "14/2622/5716", "14/2623/5716", "14/2624/5716", "14/2625/5716", "14/2626/5716",
+    "14/2620/5717", "14/2621/5717", "14/2622/5717", "14/2623/5717", "14/2624/5717", "14/2625/5717", "14/2626/5717",
+    "14/2620/5718", "14/2621/5718", "14/2622/5718", "14/2623/5718", "14/2624/5718", "14/2625/5718", "14/2626/5718",
+    "14/2620/5719", "14/2621/5719", "14/2622/5719", "14/2623/5719", "14/2624/5719", "14/2625/5719", "14/2626/5719",
+    "14/2620/5720", "14/2621/5720", "14/2622/5720", "14/2623/5720", "14/2624/5720", "14/2625/5720", "14/2626/5720",
+    "14/2620/5721", "14/2621/5721", "14/2622/5721", "14/2623/5721", "14/2624/5721", "14/2625/5721", "14/2626/5721",
+    "14/2620/5722", "14/2621/5722", "14/2622/5722", "14/2623/5722", "14/2624/5722", "14/2625/5722", "14/2626/5722",
+    "14/2620/5723", "14/2621/5723", "14/2622/5723", "14/2623/5723", "14/2624/5723", "14/2625/5723", "14/2626/5723",
+    "15/5249/11442", "15/5250/11442", "15/5251/11442",
+    "15/5249/11443", "15/5250/11443", "15/5251/11443",
+    "15/5249/11444", "15/5250/11444", "15/5251/11444",
   ]);
   /* demo view cone — keeps pan/pinch inside the packed area */
-  const BOUNDS = { lon0: -122.47, lon1: -122.22, lat0: 47.53, lat1: 47.70 };
+  const BOUNDS = { lon0: -122.435, lon1: -122.205, lat0: 47.535, lat1: 47.695 };
 
   const tileImgs = new Map();  // "z/x/y" -> { img, state: "load" | "ok" | "missing" }
   const tilePending = new Set();
@@ -1684,7 +1697,7 @@
     const spanLatKm = Math.max(b.maxLat - b.minLat, 0.02) * 111 * 1.3;
     const spanLonKm = Math.max(b.maxLon - b.minLon, 0.02) * 111 * cos0 * 1.3;
     const zoom = 9 / Math.max(spanLatKm, spanLonKm);
-    view.zoom = clamp(zoom, 0.3, 2.6); // cap keeps the render inside the packed tile scale
+    view.zoom = clamp(zoom, 0.35, 2.6); // cap keeps the render inside the packed tile scale
     view.cx = clamp(view.cx, BOUNDS.lon0, BOUNDS.lon1);
     view.cy = clamp(view.cy, BOUNDS.lat0, BOUNDS.lat1);
   }
@@ -1723,13 +1736,16 @@
   }
 
   function gridBackdrop(w, hgt) {
-    ctx.strokeStyle = "rgba(255,255,255,0.035)";
-    ctx.lineWidth = 1;
-    const step = 34;
-    ctx.beginPath();
-    for (let x = step; x < w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, hgt); }
-    for (let y = step; y < hgt; y += step) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
-    ctx.stroke();
+    // subtle 24px dot grid — the intentional empty-state backdrop (never a torn edge)
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    const step = 24;
+    for (let x = step; x < w; x += step) {
+      for (let y = step; y < hgt; y += step) {
+        ctx.beginPath();
+        ctx.arc(x, y, 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   function drawMapEmpty(w, hgt) {
@@ -1781,7 +1797,7 @@
     if (pointers.size === 2 && pinchStart) {
       const pts = [...pointers.values()];
       const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      view.zoom = clamp(pinchStart.zoom * (d / pinchStart.dist), 0.3, 2.8);
+      view.zoom = clamp(pinchStart.zoom * (d / pinchStart.dist), 0.35, 2.8);
       drawMap();
       return;
     }
@@ -1803,7 +1819,7 @@
   canvas.addEventListener("pointercancel", endPointer);
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    view.zoom = clamp(view.zoom * (e.deltaY < 0 ? 1.12 : 0.89), 0.3, 2.8);
+    view.zoom = clamp(view.zoom * (e.deltaY < 0 ? 1.12 : 0.89), 0.35, 2.8);
     drawMap();
   }, { passive: false });
 
@@ -1814,8 +1830,8 @@
     openPinSheet(e.clientX - r.left, e.clientY - r.top);
   });
 
-  $("#mapZoomIn").addEventListener("click", () => { view.zoom = clamp(view.zoom * 1.35, 0.3, 2.8); drawMap(); });
-  $("#mapZoomOut").addEventListener("click", () => { view.zoom = clamp(view.zoom / 1.35, 0.3, 2.8); drawMap(); });
+  $("#mapZoomIn").addEventListener("click", () => { view.zoom = clamp(view.zoom * 1.35, 0.35, 2.8); drawMap(); });
+  $("#mapZoomOut").addEventListener("click", () => { view.zoom = clamp(view.zoom / 1.35, 0.35, 2.8); drawMap(); });
   $("#mapRecenter").addEventListener("click", () => { fitAll(); drawMap(); });
 
   function openPinSheet(X, Y) {
@@ -1866,7 +1882,7 @@
     const cos0 = Math.cos((me.lat * Math.PI) / 180) || 0.66;
     const spanLat = Math.max(Math.abs(pin.lat - me.lat), 0.008) * 1.9; // ~pad for pins + route bow
     const spanLon = Math.max(Math.abs(pin.lon - me.lon), 0.008) * cos0 * 2.0;
-    view.zoom = clamp((9 * 0.52) / Math.max(spanLat, spanLon) * 111, 0.3, 2.8); // 0.52 ≈ the strip the card leaves
+    view.zoom = clamp((9 * 0.52) / Math.max(spanLat, spanLon) * 111, 0.35, 2.8); // 0.52 ≈ the strip the card leaves
     view.cx = clamp((me.lon + pin.lon) / 2, BOUNDS.lon0, BOUNDS.lon1);
     const midLat = (me.lat + pin.lat) / 2;
     // the visible strip's centre sits ~27% of the canvas above centre — shift the

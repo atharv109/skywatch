@@ -8,19 +8,21 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v2";
+const CACHE_VERSION = "sw-v3";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
  * manifest in app.js and the files under tiles/ on disk. */
-const TILE_Z14_X = [2623, 2624, 2625, 2626]; // downtown Seattle, z/y 5721–5723
-const TILE_Z14_Y = [5721, 5722, 5723];
-const TILE_Z13_X = [1312, 1313];             // coarse context, z/y 2861–2862
-const TILE_Z13_Y = [2861, 2862];
-const TILES = [
-  ...TILE_Z13_Y.flatMap((y) => TILE_Z13_X.map((x) => `tiles/13/${x}/${y}.png`)),
-  ...TILE_Z14_Y.flatMap((y) => TILE_Z14_X.map((x) => `tiles/14/${x}/${y}.png`)),
+const TILE_RANGES = [
+  { z: 13, x0: 1310, x1: 1314, y0: 2858, y1: 2863 },  // full Seattle bbox (coarse context)
+  { z: 14, x0: 2620, x1: 2626, y0: 5716, y1: 5723 },  // downtown through the eastside
+  { z: 15, x0: 5249, x1: 5251, y0: 11442, y1: 11444 }, // Capitol Hill / First Hill cluster
 ];
+const TILES = TILE_RANGES.flatMap(({ z, x0, x1, y0, y1 }) => {
+  const out = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push(`tiles/${z}/${x}/${y}.png`);
+  return out;
+});
 
 const PRECACHE = [
   "app.html",

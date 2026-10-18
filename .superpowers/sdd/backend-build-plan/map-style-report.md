@@ -1,6 +1,21 @@
 # Map tab rebuild + orange/black theme — report
 
-Date: 2026-10-17 · Branch: main · Commit: see git log (visual + map-rendering only, all app behavior/data flow untouched)
+Date: 2026-10-17/18 · Branch: main · Commits: see git log (visual + map-rendering only, all app behavior/data flow untouched)
+
+## Follow-up fix (tile-pack expansion, no black voids)
+
+The user's screenshot showed the original 16-tile pack ending on screen. Expanded + clamped (commit 2):
+
+- Pack now 95 tiles / 2.63 MB (≤ 6 MB, ≤ 100 cap), all verified 256×256 PNGs (PNG magic + IHDR dims checked; 95/95 converted via ffmpeg from the keyless Esri World Dark Gray raster; 94 unique + 1 water-tile duplicate).
+  - z13: x 1310–1314 × y 2858–2863 (5×6) — full Seattle bbox ≈ lat 47.53–47.70 × lon -122.44–-122.20.
+  - z14: x 2620–2626 × y 5716–5723 (7×8) — downtown through the eastside.
+  - z15: x 5249–5251 × y 11442–11444 (3×3) — Capitol Hill / First Hill / Central District cluster (1:2 retina-sharp at demo zoom).
+- Pan/zoom clamped to the exact z13 coverage bounds (`BOUNDS`: -122.435..-122.205 / 47.535..47.695) — no black-void scrolling possible; edge pan snaps back. Min zoom clamped to 0.35 so the viewport can never exceed the z13 coverage (at min zoom the viewport's lon span is 0.176° < 0.24 coverage).
+- Renderer keeps coarse→fine painting (z13 under z14 under z15) so any still-uncovered band upscales from the coarse layer (soft, never torn); if zero tiles would draw (impossible under clamps, kept as safety), the backdrop is `#0A0A0B` with a subtle 24px dot grid (the old line grid replaced).
+- Boot view: `fitAll` centers on the demo cluster and caps at 2.6 → z14/z15 territory, fully covered edge-to-edge (verified by screenshot).
+- SW: `CACHE_VERSION` → `sw-v3`; the precache list is generated from the same three zoom ranges (95 tile paths, matched 1:1 against disk).
+
+Re-verified (headless Chromium 390×844): 16 tile requests during the screenshot run — all same-origin from the local pack, zero external tile hosts; `node --check` passes on app.js + sw.js.
 
 ## What shipped
 
