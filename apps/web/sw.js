@@ -8,7 +8,7 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v4";
+const CACHE_VERSION = "sw-v5";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
@@ -26,6 +26,8 @@ const TILES = TILE_RANGES.flatMap(({ z, x0, x1, y0, y1 }) => {
 
 const PRECACHE = [
   "app.html",
+  "b.html",
+  "b/index.html",
   "app.css",
   "app.js",
   "manifest.webmanifest",
