@@ -157,8 +157,10 @@
     { code: "ar", name: "العربية (Arabic)", phrase: "عربي" },
   ];
   const LANG_NAMES = { en: "English", es: "Español", zh: "中文", tl: "Tagalog", vi: "Tiếng Việt", ar: "العربية" };
-  /* Ask Skywatch quick prompts — answers are deterministic, built from brief facts only */
+    /* Ask Skywatch quick prompts — answers are deterministic, built from brief facts only */
   const ASKS = ["is the shelter still open?", "where do I go?", "what's the air like?"];
+  /* photo label enum — the ONLY values the photo store accepts; omitted when none chosen */
+  const PHOTO_LABELS = ["road-broken", "fire", "safe-place", "flood", "other"];
 
   /* =========================================================================
    * mode switching (THE core concept)
@@ -807,7 +809,7 @@
       text: kindDef ? "" : String(text || ""),
       to: opts.to || "",   // "" = broadcast · <peer hash> = 1:1 DM · "SKYWATCH" = an Ask Skywatch question
       photoRef: opts.photoRef || null, // attached photo; bytes upload after the sync (LS pending)
-      label: kindDef ? "" : String(text || ""),
+      label: kindDef ? "" : String(opts.label || ""), // photo label enum only — captions stay display-only in text
       lat: +myLoc().lat.toFixed(5),
       lon: +myLoc().lon.toFixed(5),
       ts: Date.now(),
@@ -865,7 +867,7 @@
         full.sig = bytesToRawB64(new Uint8Array(sig));
       }
       if (p.to) full.to = p.to; // DM routing (peer hash or SKYWATCH) — added after signing so the sig contract holds
-      if (p.photoRef) { full.photoRef = p.photoRef; full.label = p.label || ""; }
+      if (p.photoRef) { full.photoRef = p.photoRef; if (p.label) full.label = p.label; }
       packets.push(full);
     }
     if (packets.length === 0) {
@@ -907,21 +909,8 @@
       void safe(flushPhotoUploads()); // batched after the sync — pending photos ride out
       return result.json;
     }
-    if (result.status === 413) {
-      // whole body refused — strip photos and give it one clean retry
-      let photosStripped = false;
-      state.queue.forEach((p) => {
-        if (p.photoRef) {
-          delete p.photoRef;
-          photosStripped = true;
-        }
-      });
-      if (!photosStripped) return null;
-      toast("Photo too large — resending without.", "warn");
-      if (syncGateway._retrying) { syncGateway._retrying = false; return null; }
-      syncGateway._retrying = true;
-      return syncGateway(opts);
-    }
+    // (a 413 here is the batch cap only — photo bytes never ride the batch;
+    //  photoRef pointers + optional enum labels are the only photo fields on packets.)
     syncGateway._retrying = false;
     q.forEach((p) => { p.state = "fail"; });
     persist.queue();
@@ -938,11 +927,13 @@
     if (!id) return;
     for (const ref of refs) {
       const ph = pending[ref];
+      const body = { deviceId: id, photoRef: ref, data: b64Only(ph.data) }; // RAW base64, no dataURL prefix
+      if (ph.label && PHOTO_LABELS.includes(ph.label)) body.label = ph.label; // enum only (road-broken|fire|safe-place|flood|other) — omitted otherwise / for stale pre-fix entries
       let r;
       try {
-        r = await fetch(apiBase() + "/api/mesh/photo", {
+        r = await fetch(apiBase() + "/mesh/photo", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId: id, photoRef: ref, data: ph.data, label: ph.label || "" }),
+          body: JSON.stringify(body),
           signal: timeoutSig(15000),
         });
       } catch (_e) { return; } // endpoint absent/network down — retry on the next sync
@@ -1665,10 +1656,11 @@
   }
 
   function pendingPhotos() { return lsGet(LS.photos, {}); }
+  function b64Only(d) { d = String(d || ""); return d.indexOf(",") >= 0 ? d.slice(d.indexOf(",") + 1) : d; }
   function photoSrc(ref) {
     const pending = pendingPhotos();
     if (pending[ref] && pending[ref].data) return pending[ref].data; // still local — renders before/without the upload
-    return apiBase() + "/api/mesh/photo/" + encodeURIComponent(ref); // 8e endpoint — 404s hide gracefully
+    return apiBase() + "/mesh/photo/" + encodeURIComponent(ref); // 8e endpoint — 404s hide gracefully
   }
   function photoThumb(ref) {
     return `<img class="msg-thumb" src="${esc(photoSrc(ref))}" alt="photo" loading="lazy" onerror="this.remove()">`;
@@ -1860,7 +1852,13 @@
             ? `<div class="chips"><span class="chip chip-ok">${ICONS.shieldS} SKYWATCH</span><span class="chip chip-n">asks route to the core</span></div>`
             : `<div class="chips">${KINDS.map((k) => `<button class="kind-chip chip chip-n" data-kind="${esc(k.id)}" aria-pressed="false">${esc(k.label)}</button>`).join("<span></span>")}</div>`;
       const photo = state.composerPhoto
-        ? `<div class="photo-wait"><img class="msg-thumb photo-wait-img" src="${esc(state.composerPhoto.data)}" alt="attached photo"><span class="mini dim">${state.composerPhoto.kb} KB · sends with the next sync</span><button class="chip chip-n" id="photoClear" aria-label="Remove photo">✕</button></div>`
+        ? `<div class="photo-wait">
+            <img class="msg-thumb photo-wait-img" src="${esc(state.composerPhoto.data)}" alt="attached photo"><span class="mini dim">${state.composerPhoto.kb} KB · sends with the next sync</span><button class="chip chip-n" id="photoClear" aria-label="Remove photo">✕</button>
+            <div class="chips" style="flex-basis:100%">
+              ${PHOTO_LABELS.map((l) => `<button class="prompt-chip chip chip-n photo-label-chip" data-photo-label="${esc(l)}" aria-pressed="${String(state.composerPhoto.label === l)}">${esc(l)}</button>`).join("")}
+              <span class="mini dim">label · optional</span>
+            </div>
+          </div>`
         : "";
       const ph = view === "neighbors" ? "What's happening around you?" : view === "directs" ? (state.dmPeer ? "Direct message — relayed by a node with signal." : "Pick a neighbor's thread above, or reply from NEIGHBORS.") : "Ask Skywatch — facts from your area brief.";
       return `<div class="composer card" style="margin-top:14px">
@@ -2005,33 +2003,45 @@
       if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); }
     });
 
+    el.querySelectorAll("[data-photo-label]").forEach((b) => {
+      b.addEventListener("click", () => {
+        haptic(5);
+        if (!state.composerPhoto) return;
+        state.composerPhoto.label = state.composerPhoto.label === b.dataset.photoLabel ? "" : b.dataset.photoLabel;
+        el.querySelectorAll("[data-photo-label]").forEach((x) => x.setAttribute("aria-pressed", String((state.composerPhoto.label || "") === x.dataset.photoLabel)));
+      });
+    });
+
     $("#meshSend", el).addEventListener("click", () => {
       const text = ta.value.trim();
       if (!text && !state.composerPhoto) { toast("Type something, or attach a photo.", "warn"); return; }
       if (view === "directs" && !state.dmPeer) { toast("Pick a thread first — or reply to a neighbor's message.", "warn"); return; }
 
       let photoRef = null;
+      let photoLabel = "";
       if (state.composerPhoto) {
         photoRef = state.composerPhoto.ref;
+        photoLabel = state.composerPhoto.label || ""; // enum chosen from the photo-kind chips, or none
         const pending = pendingPhotos();
-        pending[photoRef] = { data: state.composerPhoto.data, label: text }; // bytes live here; uploaded after the sync
+        pending[photoRef] = { data: state.composerPhoto.data, label: photoLabel };
         lsSet(LS.photos, pending);
         state.composerPhoto = null;
       }
+      const photoOpts = { photoRef, label: photoLabel };
 
       if (view === "skywatch") {
-        queuePacket(null, "", text || "photo", { to: "SKYWATCH", photoRef, label: text });
+        queuePacket(null, "", text || "photo", Object.assign({ to: "SKYWATCH" }, photoOpts));
         toast("Asked Skywatch — the answer rides the next sync back.", "mesh");
       } else if (view === "directs") {
-        queuePacket(null, "", text || "photo", { to: state.dmPeer, photoRef, label: text });
+        queuePacket(null, "", text || "photo", Object.assign({ to: state.dmPeer }, photoOpts));
         toast("Direct to " + state.dmPeer + " queued — relayed by a node with signal.", "mesh");
       } else if (pick) {
         const def = KINDS.find((k) => k.id === pick);
         queuePacket(pick, "", "");
-        if (text || photoRef) { queuePacket(null, def.id, text, { photoRef, label: text }); }
+        if (text || photoRef) { queuePacket(null, def.id, text, photoOpts); }
         toast(`Report queued — ${pick.toLowerCase()}.`, "mesh");
       } else {
-        queuePacket(null, "", text || "photo", { photoRef, label: text });
+        queuePacket(null, "", text || "photo", photoOpts);
         toast("Message queued to the mesh.", "mesh");
       }
 
