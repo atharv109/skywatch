@@ -8,7 +8,20 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v1";
+const CACHE_VERSION = "sw-v2";
+
+/* offline tile pack — the ONLY map tiles the demo may ever load (no network
+ * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
+ * manifest in app.js and the files under tiles/ on disk. */
+const TILE_Z14_X = [2623, 2624, 2625, 2626]; // downtown Seattle, z/y 5721–5723
+const TILE_Z14_Y = [5721, 5722, 5723];
+const TILE_Z13_X = [1312, 1313];             // coarse context, z/y 2861–2862
+const TILE_Z13_Y = [2861, 2862];
+const TILES = [
+  ...TILE_Z13_Y.flatMap((y) => TILE_Z13_X.map((x) => `tiles/13/${x}/${y}.png`)),
+  ...TILE_Z14_Y.flatMap((y) => TILE_Z14_X.map((x) => `tiles/14/${x}/${y}.png`)),
+];
+
 const PRECACHE = [
   "app.html",
   "app.css",
@@ -16,6 +29,9 @@ const PRECACHE = [
   "manifest.webmanifest",
   "icons/icon-180.png",
   "icons/icon-512.png",
+  "icons/icon-32.png",
+  "brand/logo.png",
+  ...TILES,
 ];
 
 /** API prefixes — identical to the harness proxy in apps/web/server.mjs. Never cached. */

@@ -686,12 +686,12 @@
       ob.step === 0
         ? `<button class="btn btn-primary btn-block" id="obNext">Continue</button>`
         : ob.step === 2
-          ? `<button class="btn btn-ok btn-block" id="obFinish">Turn on Skywatch</button>`
+          ? `<button class="btn btn-primary btn-block" id="obFinish">Turn on Skywatch</button>`
           : `<button class="btn btn-primary btn-block" id="obNext" disabled>Continue</button>`;
 
     if (ob.step === 0) {
       obEl.innerHTML = `
-        <div class="onboard-brand">${ICONS.shield}<span>Skywatch · SMS</span></div>
+        <div class="onboard-brand"><img class="brand-mark" src="brand/logo.png" alt="" onerror="this.remove()"><span>Skywatch · SMS</span></div>
         <div class="ob-sms">
           <div class="ob-msgr"><div class="ob-msg me">hi</div></div>
           <div class="ob-msgr"><div class="ob-msg bot">${esc(MIRRORED.welcome)}</div></div>
@@ -707,7 +707,7 @@
       });
     } else if (ob.step === 1) {
       obEl.innerHTML = `
-        <div class="onboard-brand">${ICONS.shield}<span>Skywatch · SMS</span></div>
+        <div class="onboard-brand"><img class="brand-mark" src="brand/logo.png" alt="" onerror="this.remove()"><span>Skywatch · SMS</span></div>
         <h2>Where should we watch?</h2>
         <p class="sub">Your home address or a 5-digit WA ZIP code — same question the bot texts you.</p>
         <label class="fld" for="obAddr">Home address or WA ZIP</label>
@@ -748,7 +748,7 @@
       });
     } else {
       obEl.innerHTML = `
-        <div class="onboard-brand">${ICONS.shield}<span>Skywatch · SMS</span></div>
+        <div class="onboard-brand"><img class="brand-mark" src="brand/logo.png" alt="" onerror="this.remove()"><span>Skywatch · SMS</span></div>
         <h2>Consent, on the record</h2>
         <p class="sub">Consent for texts and voice was granted with your first message — Skywatch records it that way, so it can call you during something bigger.</p>
         <div class="consent-card">
@@ -982,7 +982,8 @@
       el.innerHTML = `
         <div class="stagger">
           <div class="card" style="text-align:center;padding:26px 18px">
-            <div style="color:var(--accent);margin-bottom:10px">${ICONS.shield}</div>
+            <img class="brand-logo" src="brand/logo.png" alt="Skywatch logo" onerror="this.remove()">
+            <div style="color:var(--accent);margin-top:10px">${ICONS.shield}</div>
             <div style="font-family:var(--fd);font-size:20px;font-weight:700">Skywatch</div>
             <p class="dim2" style="font-size:13px;margin-top:6px">Sign up once — then hazards near you arrive by text, and a voice check-in reads them to you when they matter.</p>
             <button class="btn btn-primary btn-block" id="homeOnboard" style="margin-top:16px">Get set up — it's one text</button>
@@ -1159,15 +1160,20 @@
    * the thread sheet (full text thread)
    * =======================================================================*/
 
-  function openSheet(html, onOpen) {
+  function openSheet(html, onOpen, cls) {
     const scrim = $("#sheetScrim"), sheet = $("#sheet");
     scrim.hidden = false; sheet.hidden = false;
+    scrim.className = "sheet-scrim" + (cls ? " scrim-soft" : "");
+    sheet.className = "sheet" + (cls ? " " + cls : "");
     sheet.innerHTML = `<div class="sheet-grip"></div>` + html;
     scrim.onclick = closeSheet;
     sheet.onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
     if (onOpen) onOpen(sheet);
   }
-  function closeSheet() { $("#sheet").hidden = true; $("#sheetScrim").hidden = true; }
+  function closeSheet() {
+    $("#sheet").hidden = true; $("#sheetScrim").hidden = true;
+    if (routeTo) { routeTo = null; if (screens.map.classList.contains("active")) drawMap(); }
+  }
 
   function openThreadSheet() {
     const rows = state.thread.slice().reverse().map((m) => {
@@ -1181,13 +1187,59 @@
   }
 
   /* =========================================================================
-   * MAP — vector-only canvas projection
+   * MAP — tile slippy map (offline pack) + brand pin/route rendering
    * =======================================================================*/
+  /* Tiles come only from the committed local pack (apps/web/tiles, mirrored into
+   * the SW precache) — no network tile fetches ever happen, demo-safe offline.
+   * PACK below is the manifest of what's committed (z14 downtown 4x3 + z13
+   * context 2x2, Esri World Dark Gray raster). Views outside the pack render
+   * the base fill + pin/hazard glyphs on the plain backdrop. */
 
   const canvas = $("#mapCanvas");
   let ctx = null;
   const view = { cx: 0, cy: 0, zoom: 1, init: false };
   let pinCache = [];
+
+  /* tile pack manifest (must match apps/web/tiles on disk) */
+  const PACK = {
+    minZ: 13, maxZ: 14,
+  };
+  const TILE_SIZE = 256;
+  const tileKeys = new Set([
+    // z14 fine grid (downtown Seattle 4x3)
+    "14/2623/5721", "14/2624/5721", "14/2625/5721", "14/2626/5721",
+    "14/2623/5722", "14/2624/5722", "14/2625/5722", "14/2626/5722",
+    "14/2623/5723", "14/2624/5723", "14/2625/5723", "14/2626/5723",
+    // z13 coarse context (2x2)
+    "13/1312/2861", "13/1313/2861", "13/1312/2862", "13/1313/2862",
+  ]);
+  /* demo view cone — keeps pan/pinch inside the packed area */
+  const BOUNDS = { lon0: -122.47, lon1: -122.22, lat0: 47.53, lat1: 47.70 };
+
+  const tileImgs = new Map();  // "z/x/y" -> { img, state: "load" | "ok" | "missing" }
+  const tilePending = new Set();
+
+  function ensureTile(z, x, y) {
+    const key = z + "/" + x + "/" + y;
+    if (!tileKeys.has(key) || tileImgs.has(key) || tilePending.has(key)) return;
+    tilePending.add(key);
+    const rec = { img: new Image(), state: "load" };
+    rec.img.decoding = "async";
+    rec.img.onload = () => { rec.state = "ok"; tileImgs.set(key, rec); tilePending.delete(key); };
+    rec.img.onerror = () => { rec.state = "missing"; tilePending.delete(key); };
+    rec.img.src = "tiles/" + z + "/" + x + "/" + y + ".png";
+  }
+
+  /* Web-mercator helpers (tiles live on the true mercator grid) */
+  function lonToX(lon, W) { return ((lon + 180) / 360) * W; }
+  function latToY(lat, W) {
+    const s = Math.sin((lat * Math.PI) / 180);
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * W;
+  }
+  function yToLat(y, W) {
+    const n = Math.PI - (2 * Math.PI * y) / W;
+    return (Math.atan(Math.sinh(n)) * 180) / Math.PI;
+  }
 
   function dpr() { return window.devicePixelRatio || 1; }
 
@@ -1200,26 +1252,32 @@
     ctx.setTransform(d, 0, 0, d, 0, 0);
   }
 
-  // Linear projection: zoom 1 = ~9 km tall; pxy = px-per-km; lon scaled by cos(lat0).
+  /* world pixel size at the current zoom (zoom 1 = 9 km tall, as before) */
+  function worldPxFor() {
+    const hgt = canvas.clientHeight || 644;
+    const kmPerPx = 9 / (hgt * view.zoom);
+    const cos0 = Math.cos((view.cy * Math.PI) / 180) || 0.66;
+    return (40075 * cos0) / kmPerPx;
+  }
+
+  /** screen projector: mercator-based, so pins and tiles align exactly */
   function proj() {
     const w = canvas.clientWidth, hgt = canvas.clientHeight;
-    const kmPerDeg = 111;
-    const cos0 = Math.cos((myLoc().lat * Math.PI) / 180) || 0.66;
-    const spanKm = 9 / view.zoom;
-    const pxPerKm = hgt / spanKm;
+    const W = worldPxFor();
+    const ox = lonToX(view.cx, W) - w / 2;
+    const oy = latToY(view.cy, W) - hgt / 2;
     return {
-      x: (lon) => w / 2 + (lon - view.cx) * kmPerDeg * pxPerKm * cos0,
-      y: (lat) => hgt / 2 - (lat - view.cy) * kmPerDeg * pxPerKm,
-      pxPerKm,
+      x: (lon) => lonToX(lon, W) - ox,
+      y: (lat) => latToY(lat, W) - oy,
+      W, ox, oy,
+      pxPerKm: hgt * view.zoom / 9,
     };
   }
 
   function panBy(dxPx, dyPx) {
-    const kmPerDeg = 111;
-    const cos0 = Math.cos((view.cy * Math.PI) / 180) || 0.66;
-    const pxPerKm = (canvas.clientHeight || 700) * view.zoom / 9;
-    view.cx -= (dxPx / pxPerKm) / kmPerDeg / cos0;
-    view.cy += (dyPx / pxPerKm) / kmPerDeg;
+    const W = worldPxFor();
+    view.cx = clamp((lonToX(view.cx, W) - dxPx) / W * 360 - 180, BOUNDS.lon0, BOUNDS.lon1);
+    view.cy = clamp(yToLat(latToY(view.cy, W) + dyPx, W), BOUNDS.lat0, BOUNDS.lat1);
   }
 
   function fitMapSoon() {
@@ -1229,45 +1287,7 @@
     drawMap();
   }
 
-  function collectFeatures() {
-    const mapSrc = cached("mapState");
-    const meshSrc = cached("mesh");
-    const loc = myLoc();
-    if (!mapSrc || !mapSrc.data) return null;
-    // Fit to the actionable layer (shelters + mesh beacons + the user): anonymized
-    // user dots and road cameras still DRAW but never drive the initial zoom.
-    const lons = [loc.lon], lats = [loc.lat];
-    const m = mapSrc.data;
-    (m.resources || []).forEach((r) => { lats.push(r.lat); lons.push(r.lon); });
-    if (meshSrc && meshSrc.data) {
-      const ms = meshSrc.data;
-      (ms.beacons || []).forEach((b) => { lats.push(b.lat); lons.push(b.lon); });
-      (ms.hazardReports || []).forEach((b) => { lats.push(b.lat); lons.push(b.lon); });
-    }
-    return { minLat: Math.min(...lats), maxLat: Math.max(...lats), minLon: Math.min(...lons), maxLon: Math.max(...lons) };
-  }
-
-  function fitAll() {
-    const loc = myLoc();
-    const b = collectFeatures();
-    if (!b) { view.cx = loc.lon; view.cy = loc.lat; view.zoom = 1.4; return; }
-    view.cx = (b.minLon + b.maxLon) / 2 || loc.lon;
-    view.cy = (b.minLat + b.maxLat) / 2 || loc.lat;
-    const cos0 = Math.cos((view.cy * Math.PI) / 180) || 0.66;
-    const spanLatKm = Math.max(b.maxLat - b.minLat, 0.09) * 111 * 1.3;
-    const spanLonKm = Math.max(b.maxLon - b.minLon, 0.09) * 111 * cos0 * 1.3;
-    const zoom = 9 / Math.max(spanLatKm, spanLonKm);
-    view.zoom = clamp(zoom, 0.25, 8);
-  }
-
-  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
-
-  /** Satellite plume polygons accept the hazard shape, raw rings, or a points array (honest render only). */
-  function plumRings(pl) {
-    if (pl && pl.geometry && pl.geometry.type === "Polygon") return geometryPolys(pl.geometry);
-    if (pl && Array.isArray(pl.coordinates)) return geometryPolys({ type: "Polygon", coordinates: pl.coordinates });
-    return [];
-  }
+  let routeTo = null; // the selected resource {lon,lat,…} while its sheet is open
 
   function drawMap() {
     if (!ctx) return;
@@ -1275,11 +1295,13 @@
     const d = DPR();
     if (canvas.width !== Math.round(r.width * d)) sizeCanvas();
     const w = r.width, hgt = r.height;
+    const W = worldPxFor();
     ctx.save();
     ctx.clearRect(0, 0, w, hgt);
-    ctx.fillStyle = "#090b0f";
+    ctx.fillStyle = "#0A0A0B";
     ctx.fillRect(0, 0, w, hgt);
-    gridBackdrop(w, hgt);
+    const tilesDrawn = drawTileLayer(w, hgt, W);
+    if (!tilesDrawn) gridBackdrop(w, hgt);
     const mapData = cached("mapState");
     const meshData = cached("mesh");
     if (!mapData) {
@@ -1303,9 +1325,9 @@
             if (idx === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
           });
           ctx.closePath();
-          ctx.fillStyle = "rgba(240,163,78,0.18)";
+          ctx.fillStyle = "rgba(249,115,22,0.16)";
           ctx.fill();
-          ctx.strokeStyle = "rgba(240,163,78,0.75)";
+          ctx.strokeStyle = "rgba(249,115,22,0.7)";
           ctx.lineWidth = 1.2;
           ctx.stroke();
         });
@@ -1315,12 +1337,12 @@
         const X = p.x(al.lon), Y = p.y(al.lat);
         ctx.beginPath();
         ctx.arc(X, Y, 9.5, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(240,163,78,0.5)";
+        ctx.strokeStyle = "rgba(249,115,22,0.5)";
         ctx.lineWidth = 1.4;
         ctx.stroke();
         ctx.beginPath();
         ctx.arc(X, Y, 5.5, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(240,163,78,0.95)";
+        ctx.fillStyle = "rgba(249,115,22,0.95)";
         ctx.fill();
         ctx.fillStyle = "#241403";
         ctx.font = "700 8px ui-monospace, monospace";
@@ -1332,7 +1354,7 @@
     // hazards (polygons, filled by severity)
     (m.hazards || []).forEach((hz) => {
       const polys = geometryPolys(hz.geometry);
-      const sevCol = hz.severity >= 4 ? [255, 107, 94] : hz.severity >= 3 ? [255, 132, 78] : hz.severity >= 2 ? [240, 163, 78] : [240, 163, 78];
+      const sevCol = hz.severity >= 4 ? [255, 107, 94] : [249, 115, 22];
       const alpha = 0.07 + 0.055 * hz.severity;
       ctx.fillStyle = `rgba(${sevCol[0]},${sevCol[1]},${sevCol[2]},${alpha})`;
       ctx.strokeStyle = `rgba(${sevCol[0]},${sevCol[1]},${sevCol[2]},0.55)`;
@@ -1349,29 +1371,29 @@
       });
     });
 
-    // roads: points (cameras) — red while flooded/blocked with >=0.5, slate otherwise
+    // roads: blocked/flooded verdicts — red segment dots
     (m.roads || []).forEach((rd) => {
       const blocked = (rd.status === "flooded" || rd.status === "blocked") && rd.confidence >= 0.5;
       const X = p.x(rd.lon), Y = p.y(rd.lat);
       ctx.beginPath();
-      ctx.arc(X, Y, 5.5, 0, Math.PI * 2);
-      ctx.fillStyle = blocked ? "rgba(255,107,94,0.95)" : "rgba(125,134,153,0.55)";
+      ctx.arc(X, Y, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = blocked ? "rgba(255,80,70,0.95)" : "rgba(156,163,175,0.4)";
       ctx.fill();
       if (blocked) {
         ctx.beginPath();
-        ctx.arc(X, Y, 9.5, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(255,107,94,0.35)";
+        ctx.arc(X, Y, 8.5, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(255,80,70,0.35)";
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
     });
 
-    // user dots (small, dim)
+    // user dots — small white, 70% opacity
     (m.userDots || []).forEach((ud) => {
       const X = p.x(ud.lon), Y = p.y(ud.lat);
       ctx.beginPath();
-      ctx.arc(X, Y, 1.8, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(164,208,255,0.5)";
+      ctx.arc(X, Y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
       ctx.fill();
     });
 
@@ -1405,32 +1427,49 @@
           ctx.fillText((score * 100).toFixed(0), X, Y + 3);
         }
       });
-      // rescue beacons: pulsing markers, ranked
+      // rescue beacons — orange pulsing dot + priority label
       (ms.beacons || []).forEach((bc, i) => {
         const X = p.x(bc.lon), Y = p.y(bc.lat);
-        const pulse = 8 + 4 * Math.sin(t / 420 + i * 1.7);
-        const col = bc.kind === "Trapped" ? "255,107,94" : bc.kind === "Injured" ? "240,163,78" : "240,163,78";
+        const pulse = 9 + 5 * Math.sin(t / 420 + i * 1.7);
         ctx.beginPath();
-        ctx.arc(X, Y, pulse + 4, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${col},0.12)`;
+        ctx.arc(X, Y, pulse + 6, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(249,115,22,0.14)";
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(X, Y, 7, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${col},0.92)`;
+        ctx.arc(X, Y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(249,115,22,0.95)";
         ctx.fill();
-        ctx.fillStyle = "#1b0405";
-        ctx.font = "700 9px var(--fd), system-ui";
-        ctx.textAlign = "center";
-        ctx.fillText(String(i + 1), X, Y + 3);
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        beaconChip(X + 14, Y - 24, "P" + (i + 1), "#F97316");
       });
     }
 
-    // resources (pins)
+    // my location (under pins, over roads)
+    const me = myLoc();
+    const mx = p.x(me.lon), my2 = p.y(me.lat);
+    ctx.beginPath();
+    ctx.arc(mx, my2, 12, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.12)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(mx, my2, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(10,10,11,0.55)";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    // route line first, so the pin draws on top of it
+    drawRouteLine(p, t);
+
+    // resources (brand pins)
     pinCache = [];
     (m.resources || []).forEach((res) => {
       const X = p.x(res.lon), Y = p.y(res.lat);
       pinCache.push({ x: X, y: Y, res });
-      drawPin(res, X, Y);
+      drawPin(res, X, Y, t);
     });
 
     // queued local pins (offline)
@@ -1451,57 +1490,236 @@
       });
     }
 
-    // me
-    const me = myLoc();
-    const mx = p.x(me.lon), my2 = p.y(me.lat);
-    ctx.beginPath();
-    ctx.arc(mx, my2, 10, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(111,165,245,0.16)";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(mx, my2, 4.5, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(111,165,245,0.95)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(238,241,246,0.9)";
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-
     ctx.restore();
     renderMapChips();
+  }
+
+  function drawTileLayer(w, hgt, W) {
+    const ox = lonToX(view.cx, W) - w / 2;
+    const oy = latToY(view.cy, W) - hgt / 2;
+    let drawn = 0;
+    // coarse→fine: a coarse context tile paints first, its z14 children cover it
+    for (let z = PACK.minZ; z <= PACK.maxZ; z++) {
+      const scale = W / (TILE_SIZE * (1 << z));
+      const x0 = Math.floor(ox / (TILE_SIZE * scale)), x1 = Math.floor((ox + w) / (TILE_SIZE * scale));
+      const y0 = Math.floor(oy / (TILE_SIZE * scale)), y1 = Math.floor((oy + hgt) / (TILE_SIZE * scale));
+      for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) {
+          const key = z + "/" + x + "/" + y;
+          if (!tileKeys.has(key)) continue;
+          ensureTile(z, x, y);
+          const rec = tileImgs.get(key);
+          if (rec && rec.state === "ok") {
+            const dx = x * TILE_SIZE * scale - ox, dy = y * TILE_SIZE * scale - oy;
+            const s = TILE_SIZE * scale;
+            ctx.drawImage(rec.img, dx - 0.5, dy - 0.5, s + 1, s + 1);
+            drawn++;
+          }
+        }
+      }
+    }
+    return drawn > 0;
+  }
+
+  /* selected-pin route: an animated glowing orange path (visual, not navigation) */
+  function drawRouteLine(p, t) {
+    if (!routeTo) return;
+    const me = myLoc();
+    const x1 = p.x(me.lon), y1 = p.y(me.lat);
+    const x2 = p.x(routeTo.lon), y2 = p.y(routeTo.lat);
+    const ddx = x2 - x1, ddy = y2 - y1;
+    const len = Math.hypot(ddx, ddy) || 1;
+    const cxp = (x1 + x2) / 2 - (ddy / len) * len * 0.22;
+    const cyp = (y1 + y2) / 2 + (ddx / len) * len * 0.22;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.shadowColor = "rgba(249,115,22,0.85)";
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = "rgba(249,115,22,0.22)";
+    ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cxp, cyp, x2, y2); ctx.stroke();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(249,115,22,0.5)";
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cxp, cyp, x2, y2); ctx.stroke();
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = "#FB923C";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([13, 9]);
+    ctx.lineDashOffset = -(t / 30) % 22;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cxp, cyp, x2, y2); ctx.stroke();
+    ctx.restore();
+  }
+
+  /* ---- brand pins: 44px white circle + dark kind glyph + status chip ---- */
+  function drawPin(res, X, Y, t) {
+    const sel = routeTo === res;
+    const R = 22;
+    if (sel) {
+      ctx.beginPath();
+      ctx.arc(X, Y, R + 7, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(249,115,22,0.2)";
+      ctx.fill();
+    }
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 9;
+    ctx.shadowOffsetY = 3;
+    ctx.beginPath();
+    ctx.arc(X, Y, R, 0, Math.PI * 2);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fill();
+    ctx.restore();
+    if (res.partner) {
+      ctx.beginPath();
+      ctx.arc(X, Y, R + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = "#F97316";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    drawKindGlyph(res.kind, X, Y, R);
+    pinStatusChip(X, Y + R + 6, res);
+  }
+
+  /* small dark inline glyph shapes — house-people / pharmacy cross / flag */
+  function drawKindGlyph(kind, X, Y, R) {
+    ctx.save();
+    ctx.strokeStyle = "#111114";
+    ctx.fillStyle = "#111114";
+    ctx.lineWidth = 1.9;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    if (kind === "pharmacy") {
+      const a = 4.6;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.moveTo(X, Y - a); ctx.lineTo(X, Y + a);
+      ctx.moveTo(X - a, Y); ctx.lineTo(X + a, Y);
+      ctx.stroke();
+    } else if (kind === "community_center") {
+      ctx.beginPath();
+      ctx.moveTo(X - 2, Y - 7); ctx.lineTo(X - 2, Y + 7);
+      ctx.moveTo(X - 2, Y - 7); ctx.lineTo(X + 6, Y - 4.6); ctx.lineTo(X - 2, Y - 2.2);
+      ctx.stroke();
+    } else {
+      // shelter: house + two resident dots
+      ctx.strokeRect(X - 5.4, Y - 1.4, 10.8, 7.6);
+      ctx.beginPath();
+      ctx.moveTo(X - 6.6, Y - 1.4); ctx.lineTo(X, Y - 7); ctx.lineTo(X + 6.6, Y - 1.4);
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(X - 2.4, Y + 1.6, 1.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(X + 2.4, Y + 1.6, 1.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* status chip under the pin: dark pill + dot + "open · 0.73" */
+  function pinStatusChip(X, Y, res) {
+    const conf = Math.round((res.confidence || 0) * 100) / 100;
+    const label = (res.status || "unknown") + " · " + conf.toFixed(2);
+    let dot;
+    if (res.status === "open" && (res.confidence || 0) >= 0.5) dot = "#42CE93";
+    else if (res.status === "closed") dot = "#FF6B5E";
+    else if (res.status === "full") dot = "#F0A34E";
+    else dot = "#9CA3AF";
+    ctx.save();
+    ctx.font = "600 10.5px ui-monospace, monospace";
+    const tw = ctx.measureText(label).width;
+    const bw = tw + 26, bh = 17;
+    ctx.beginPath();
+    roundedRect(X - bw / 2, Y, bw, bh, 8.5);
+    ctx.fillStyle = "rgba(13,13,15,0.93)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(X - bw / 2 + 10, Y + bh / 2, 3, 0, Math.PI * 2);
+    ctx.fillStyle = dot;
+    ctx.fill();
+    ctx.fillStyle = "#E5E7EB";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, X - bw / 2 + 16, Y + bh / 2 + 0.5);
+    ctx.restore();
+  }
+
+  function beaconChip(X, Y, label, dot) {
+    ctx.save();
+    ctx.font = "700 10px ui-monospace, monospace";
+    const bw = ctx.measureText(label).width + 18, bh = 16;
+    ctx.beginPath();
+    roundedRect(X, Y, bw, bh, 8);
+    ctx.fillStyle = "rgba(13,13,15,0.93)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(X + 9, Y + bh / 2, 3, 0, Math.PI * 2);
+    ctx.fillStyle = dot;
+    ctx.fill();
+    ctx.fillStyle = "#E5E7EB";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, X + 15, Y + bh / 2 + 0.5);
+    ctx.restore();
+  }
+
+  function roundedRect(x, y, w, hgt, r) {
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + hgt, r);
+    ctx.arcTo(x + w, y + hgt, x, y + hgt, r);
+    ctx.arcTo(x, y + hgt, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function fitAll() {
+    const loc = myLoc();
+    const b = collectFeatures();
+    if (!b) { view.cx = loc.lon; view.cy = loc.lat; view.zoom = 1.4; return; }
+    view.cx = (b.minLon + b.maxLon) / 2 || loc.lon;
+    view.cy = (b.minLat + b.maxLat) / 2 || loc.lat;
+    const cos0 = Math.cos((view.cy * Math.PI) / 180) || 0.66;
+    const spanLatKm = Math.max(b.maxLat - b.minLat, 0.02) * 111 * 1.3;
+    const spanLonKm = Math.max(b.maxLon - b.minLon, 0.02) * 111 * cos0 * 1.3;
+    const zoom = 9 / Math.max(spanLatKm, spanLonKm);
+    view.zoom = clamp(zoom, 0.3, 2.6); // cap keeps the render inside the packed tile scale
+    view.cx = clamp(view.cx, BOUNDS.lon0, BOUNDS.lon1);
+    view.cy = clamp(view.cy, BOUNDS.lat0, BOUNDS.lat1);
+  }
+
+  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+  function collectFeatures() {
+    const mapSrc = cached("mapState");
+    const meshSrc = cached("mesh");
+    const loc = myLoc();
+    if (!mapSrc || !mapSrc.data) return null;
+    // Fit to the actionable layer (shelters + mesh beacons + the user): anonymized
+    // user dots and road cameras still DRAW but never drive the initial zoom.
+    const lons = [loc.lon], lats = [loc.lat];
+    const m = mapSrc.data;
+    (m.resources || []).forEach((r) => { lats.push(r.lat); lons.push(r.lon); });
+    if (meshSrc && meshSrc.data) {
+      const ms = meshSrc.data;
+      (ms.beacons || []).forEach((b) => { lats.push(b.lat); lons.push(b.lon); });
+      (ms.hazardReports || []).forEach((b) => { lats.push(b.lat); lons.push(b.lon); });
+    }
+    return { minLat: Math.min(...lats), maxLat: Math.max(...lats), minLon: Math.min(...lons), maxLon: Math.max(...lons) };
+  }
+
+  /** Satellite plume polygons accept the hazard shape, raw rings, or a points array (honest render only). */
+  function plumRings(pl) {
+    if (pl && pl.geometry && pl.geometry.type === "Polygon") return geometryPolys(pl.geometry);
+    if (pl && Array.isArray(pl.coordinates)) return geometryPolys({ type: "Polygon", coordinates: pl.coordinates });
+    return [];
   }
 
   function geometryPolys(geom) {
     if (!geom) return [];
     if (geom.type === "Polygon") return (geom.coordinates || []).map((ring) => (ring || []).slice(0, 1));
     return [];
-  }
-
-  function drawPin(res, X, Y) {
-    const col = res.status === "open" ? "66,206,147" : res.status === "full" ? "240,163,78" : "125,134,153";
-    const X0 = X, Y0 = Y;
-    ctx.beginPath();
-    ctx.moveTo(X0, Y0 - 13);
-    ctx.arc(X0, Y0 - 13, 7.5, Math.PI * 0.62, Math.PI * 2.38);
-    ctx.lineTo(X0, Y0);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(${col},0.95)`;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(9,11,15,0.9)";
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    if (res.partner) {
-      ctx.beginPath();
-      ctx.arc(X0, Y0 - 13, 11, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(66,206,147,0.4)";
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-    }
-    if (res.status === "open") {
-      ctx.beginPath();
-      ctx.arc(X0, Y0 - 15, 2, 0, Math.PI * 2);
-      ctx.fillStyle = "#06251a";
-      ctx.fill();
-    }
   }
 
   function gridBackdrop(w, hgt) {
@@ -1515,12 +1733,12 @@
   }
 
   function drawMapEmpty(w, hgt) {
-    ctx.fillStyle = "rgba(238,241,246,0.6)";
+    ctx.fillStyle = "rgba(245,245,245,0.6)";
     ctx.font = "600 14px system-ui";
     ctx.textAlign = "center";
     ctx.fillText("Map data hasn't synced yet", w / 2, hgt / 2 - 8);
     ctx.font = "400 12px system-ui";
-    ctx.fillStyle = "rgba(125,134,153,1)";
+    ctx.fillStyle = "rgba(156,163,175,1)";
     ctx.fillText(state.mode === "offline" ? "Get signal once — then Map keeps working offline." : "Connecting to the Skywatch API…", w / 2, hgt / 2 + 12);
   }
 
@@ -1539,7 +1757,7 @@
     chips.innerHTML = bits.join("");
   }
 
-  /* map gestures: pan + pinch */
+  /* map gestures: pan + pinch (tiles and pins both redraw) */
   let pointers = new Map();
   let lastPan = null;
   let pinchStart = null;
@@ -1563,7 +1781,7 @@
     if (pointers.size === 2 && pinchStart) {
       const pts = [...pointers.values()];
       const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      view.zoom = clamp(pinchStart.zoom * (d / pinchStart.dist), 0.05, 24);
+      view.zoom = clamp(pinchStart.zoom * (d / pinchStart.dist), 0.3, 2.8);
       drawMap();
       return;
     }
@@ -1585,42 +1803,83 @@
   canvas.addEventListener("pointercancel", endPointer);
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    view.zoom = clamp(view.zoom * (e.deltaY < 0 ? 1.12 : 0.89), 0.05, 24);
+    view.zoom = clamp(view.zoom * (e.deltaY < 0 ? 1.12 : 0.89), 0.3, 2.8);
     drawMap();
   }, { passive: false });
 
   canvas.addEventListener("click", (e) => {
     if (dragDist > 9) return; // a drag, not a tap
+    if (!$("#sheet").hidden) closeSheet(); // a tap on the map closes an open pin sheet
     const r = canvas.getBoundingClientRect();
     openPinSheet(e.clientX - r.left, e.clientY - r.top);
   });
 
-  $("#mapZoomIn").addEventListener("click", () => { view.zoom = clamp(view.zoom * 1.35, 0.05, 24); drawMap(); });
-  $("#mapZoomOut").addEventListener("click", () => { view.zoom = clamp(view.zoom / 1.35, 0.05, 24); drawMap(); });
+  $("#mapZoomIn").addEventListener("click", () => { view.zoom = clamp(view.zoom * 1.35, 0.3, 2.8); drawMap(); });
+  $("#mapZoomOut").addEventListener("click", () => { view.zoom = clamp(view.zoom / 1.35, 0.3, 2.8); drawMap(); });
   $("#mapRecenter").addEventListener("click", () => { fitAll(); drawMap(); });
 
   function openPinSheet(X, Y) {
-    let best = null, bestD = 30;
+    let best = null, bestD = 34;
     for (const pc of pinCache) {
       const d = Math.hypot(pc.x - X, pc.y - Y);
       if (d < bestD) { best = pc; bestD = d; }
     }
     if (!best) return;
     const r = best.res;
+    routeTo = r;
+    reframeToPin(r); // pull the route + pin into the strip above the sheet card
+    drawMap();
     const conf = Math.round((r.confidence || 0) * 100);
-    const col = r.status === "open" ? "var(--ok)" : r.status === "full" ? "var(--warn)" : "var(--text3)";
+    const dist = haversineKm(myLoc(), r);
+    const verified = r.status === "open" && conf >= 50;
     openSheet(`
-      <h3>${esc(r.name)}</h3>
-      <div class="chips" style="margin:10px 0 12px">
-        <span class="chip" style="color:${col};border-color:${col}">${esc(r.status.toUpperCase())}</span>
-        ${r.partner ? '<span class="chip chip-ok">Partner resource</span>' : ""}
-        <span class="chip chip-n chip-mono">${esc(r.kind)}</span>
-        <span class="chip chip-n chip-mono">confidence ${conf}%</span>
+      <div class="pin-head">
+        <span class="pin-glyph${r.partner ? " partner" : ""}">${kindGlyphSvg(r.kind)}</span>
+        <div style="flex:1;min-width:0">
+          <h3>${esc(r.name)}</h3>
+          <p class="pin-meta">${esc(dist.toFixed(2))} km from you</p>
+        </div>
       </div>
-      <div class="confbar"><i style="width:${conf}%"></i></div>
-      <p class="mini dim" style="margin-top:10px">A pin only says what someone verified — confidence fades until a fresh check-in refreshes it. ${state.mode === "offline" ? "Offline: this pin is the last thing your map synced." : ""}</p>
-      <a class="btn btn-ghost btn-block" style="margin-top:12px" href="#" data-close>Close</a>
-    `);
+      <div class="chips" style="margin:12px 0 0">
+        <span class="chip ${verified ? "chip-ok" : r.status === "closed" ? "chip-danger" : r.status === "full" ? "chip-warn" : "chip-n"}">${esc(r.status.toUpperCase())}</span>
+        <span class="chip chip-n">${verified ? "verified just now · " : ""}confidence ${conf}%</span>
+        ${r.partner ? '<span class="chip chip-warn">partner</span>' : ""}
+        <span class="chip chip-n chip-mono">${esc(r.kind)}</span>
+      </div>
+      ${r.hours ? `<p class="pin-hours">${esc(r.hours)}</p>` : `<p class="pin-hours dim">No posted hours — the status above is the freshest check-in.</p>`}
+      <a class="btn btn-cta btn-block" style="margin-top:14px" href="geo:${r.lat},${r.lon}" rel="noopener">${ICONS.pin} Directions</a>
+      <p class="mini dim2" style="margin-top:10px;text-align:center">Route line is a demo guide — not turn-by-turn navigation.</p>
+    `, null, "sheet-detail");
+  }
+
+  function haversineKm(a, b) {
+    const R = 6371, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    const s = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+      + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  /* frame me + the selected pin in the visible strip above the sheet card */
+  function reframeToPin(pin) {
+    const me = myLoc();
+    const cos0 = Math.cos((me.lat * Math.PI) / 180) || 0.66;
+    const spanLat = Math.max(Math.abs(pin.lat - me.lat), 0.008) * 1.9; // ~pad for pins + route bow
+    const spanLon = Math.max(Math.abs(pin.lon - me.lon), 0.008) * cos0 * 2.0;
+    view.zoom = clamp((9 * 0.52) / Math.max(spanLat, spanLon) * 111, 0.3, 2.8); // 0.52 ≈ the strip the card leaves
+    view.cx = clamp((me.lon + pin.lon) / 2, BOUNDS.lon0, BOUNDS.lon1);
+    const midLat = (me.lat + pin.lat) / 2;
+    // the visible strip's centre sits ~27% of the canvas above centre — shift the
+    // view centre south by that much so me + pin render inside it
+    view.cy = clamp(midLat - (0.27 * (9 / view.zoom)) / 111, BOUNDS.lat0, BOUNDS.lat1);
+  }
+
+  /** inline SVG for the sheet's pin glyph (same three kinds as the map) */
+  function kindGlyphSvg(kind) {
+    const a = 'viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"';
+    if (kind === "pharmacy") return `<svg ${a}><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/></svg>`;
+    if (kind === "community_center") return `<svg ${a}><path d="M6 21V4"/><path d="M6 4h11l-2.6 3.4L17 11H6"/></svg>`;
+    return `<svg ${a}><path d="M4 11.5 12 4.5l8 7"/><path d="M6.2 9.8V20h11.6V9.8"/><circle cx="10" cy="14.6" r="1.5"/><circle cx="14.6" cy="16.4" r="1.5"/></svg>`;
   }
 
   function drawMapLoop() {
@@ -1631,7 +1890,6 @@
   }
 
   function DPR() { return Math.max(1, window.devicePixelRatio || 1); }
-
   /* =========================================================================
    * MESH tab rendering — three surfaces: NEIGHBORS / DIRECTS / SKYWATCH
    * =======================================================================*/

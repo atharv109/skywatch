@@ -7,13 +7,13 @@
 <meta name="description" content="Skywatch — neighborhood emergency briefs that keep working when the network doesn't.">
 <!-- installable (Add to Home Screen): standalone web-app chrome -->
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icons/icon-180.png" type="image/png">
+<link rel="icon" href="icons/icon-32.png" type="image/png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Skywatch">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#0A0A0B">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -73,6 +73,7 @@ if ("serviceWorker" in navigator) {
           <canvas id="mapCanvas" aria-label="Vector map of hazards, resources and the mesh layer"></canvas>
           <div class="map-hud">
             <div class="map-chips" id="mapChips"></div>
+            <span class="map-attr" aria-hidden="true">© Esri · © OpenStreetMap contributors · offline tile pack</span>
             <div class="map-ctl">
               <button id="mapZoomIn" class="map-btn" aria-label="Zoom in" type="button">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
