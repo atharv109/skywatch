@@ -27,3 +27,9 @@ Status: COMPLETE on main, additive; NO landed route/state-machine code changed �
 - `texts` cap 5 / 140 chars is demo-sized; the real webhook path's limits are unchanged.
 - The route does not rate-limit (demo-only + env-gated); a hardened variant would need the TOOL_SECRET treatment or a rate gate before any non-demo reuse.
 - The map link path `/b/:userId` is a frontend-landing convention — backend only composes the URL.
+
+## Append — Task 8h: POST /demo/brief (continue with the already-SMS-signed-up account)
+
+- Same `DEMO_SIGNUP=1` gate; body `{phone (E.164), platform?: sms|imessage}` (400 on a bad phone shape / union violation). A pure READ: `getUserByPhone` (a `platform` mismatch reads as "no account", mirroring the byPhone route's platform check) → `{ok, userId, state, lang, brief}` — the byPhone-equivalent brief over the user's resolved loc (`brief: null` honestly when the loc isn't set yet); **404 + a fixed honest sentence when no user exists for that phone; the phone is never echoed or logged** (console-spy asserted). No mapLink (the /b/:id page composes it; not in this response's contract).
+- `/b/:id` landing-page route (controller append, same commit wave): id-injected `b.html` serve + `window.SKYWATCH_BRIEF_ID` preference — verified live on the deployed service (200 on skywatch-9kvd; see its section in the /b-fix commit).
+- Tests: +1 hermetic (gate 403 / honest 404 pre-signup / full round-trip continuing the signed-up account with state+lang+brief / 400 shapes / platform-mismatch 404 / phone-never-logged). Hermetic suite: 233 total (222 passed + 11 gated-skip), 20 files — two consecutive green runs (one first-run collect-latency flake under parallel machine load).

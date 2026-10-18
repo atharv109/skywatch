@@ -4,6 +4,7 @@ import type { Config } from "../config.ts";
 import type { AppDeps } from "../deps.ts";
 import { buildUserBrief } from "../brief/build.ts";
 import type { PhotonPlatform } from "../deliver/photon.ts";
+import type { UserRecord } from "../deliver/store.ts";
 
 /**
  * Task 8g — phone-native DEMO onboarding (backend side). The phone app cannot hold
@@ -124,6 +125,30 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
     // The phone (may be non-English) re-renders i18n client-side; the backend's own
     // validator applies per-brief-language rules when this feeds chat.
     return c.json({ ok: true, lang: "en", brief });
+  });
+
+  /**
+   * Task 8h: "I already signed up via SMS — the app should continue with THAT
+   * account." Same gate, same never-log-the-phone posture; the brief is the
+   * byPhone-equivalent (no signup, no writes: a pure read).
+   */
+  app.post("/brief", async (c) => {
+    if (!config.demoSignup) return c.json({ error: "demo mode is off (DEMO_SIGNUP is unset)" }, 403);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body !== "object") return c.json({ error: "body must be a JSON object" }, 400);
+    const phone = typeof body["phone"] === "string" ? body["phone"] : null;
+    const platformRaw = body["platform"];
+    if (!phone || !PHONE_RE.test(phone)) return c.json({ error: "phone must be an E.164 string (e.g. +15557770001)" }, 400);
+    if (platformRaw !== undefined && platformRaw !== "sms" && platformRaw !== "imessage") {
+      return c.json({ error: "platform must be sms or imessage" }, 400);
+    }
+    const user = (await (await deps.deliver()).getUserByPhone(phone)) as Pick<UserRecord, "id" | "state" | "lang" | "loc" | "platform"> | null;
+    if (!user || (platformRaw !== undefined && user.platform !== platformRaw)) {
+      // No user id/phone in the body — an honest fixed sentence (no signups happened / wrong platform).
+      return c.json({ error: "no Skywatch account for this phone (text the Skywatch number from that phone first; signup is SMS-verified)" }, 404);
+    }
+    const brief = user.loc ? await buildUserBrief(await deps.match(), { id: user.id, lang: user.lang, loc: user.loc }, Date.now()) : null;
+    return c.json({ ok: true, userId: user.id, state: user.state, lang: user.lang, brief });
   });
 
   return app;

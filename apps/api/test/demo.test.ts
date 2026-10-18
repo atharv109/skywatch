@@ -257,6 +257,41 @@ describe("Task 8g: GET /b/:id (brief map-link page, id-injected)", () => {
   });
 });
 
+describe("Task 8h: POST /demo/brief (continue with the already-SMS-signed-up account)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("existing user: {ok, userId, state, lang, brief} — and the phone is never logged; unknown phone: honest 404; gate: 403", async () => {
+    const h0 = harness();
+    expect((await h0.app.request("/demo/brief", { method: "POST", body: JSON.stringify({ phone: PHONE }) })).status).toBe(403);
+
+    const h = harness({ env: { DEMO_SIGNUP: "1" }, hazards: [hazardAround("hms-smoke:8h")], resources: [shelterNear()] });
+    // no account yet: honest fixed-sentence 404 (no phone in the body, none in the logs)
+    const miss = await h.app.request("/demo/brief", { method: "POST", body: JSON.stringify({ phone: PHONE }), headers: { "content-type": "application/json" } });
+    expect(miss.status).toBe(404);
+    expect(((await miss.json()) as { error: string }).error).toContain("no Skywatch account for this phone");
+    expect(h.logs.lines.some((l) => l.includes(PHONE))).toBe(false);
+
+    // sign up through the REAL path (already tested), then continue with THAT account
+    const signedUp = (await (await signup(h, { phone: PHONE, platform: "sms", texts: ["hi", "98104", "espanol por favor"] })).json()) as { userId: string };
+    const briefReq = await h.app.request("/demo/brief", { method: "POST", body: JSON.stringify({ phone: PHONE }), headers: { "content-type": "application/json" } });
+    expect(briefReq.status).toBe(200);
+    const out = (await briefReq.json()) as { ok: boolean; userId: string; state: string; lang: string; brief: { hazards: Array<{ title: string }>; shelter: { name: string } | null } | null };
+    expect(out.ok).toBe(true);
+    expect(out.userId).toBe(signedUp.userId);
+    expect(out.state).toBe("active");
+    expect(out.lang).toBe("es");
+    expect(out.brief?.shelter?.name).toBe("8g Test Shelter");
+    expect(h.logs.lines.some((l) => l.includes(PHONE))).toBe(false);
+
+    // a bad phone shape is 400; a platform-mismatched lookup reads as "no account"
+    expect((await h.app.request("/demo/brief", { method: "POST", body: JSON.stringify({ phone: "15557770001" }), headers: { "content-type": "application/json" } })).status).toBe(400);
+    expect((await h.app.request("/demo/brief", { method: "POST", body: JSON.stringify({ phone: PHONE, platform: "imessage" }), headers: { "content-type": "application/json" } })).status).toBe(404);
+  });
+});
+
 // Real-Mongo block: the demo route over defaultDeps (same real signup path the
 // webhook route serves; cleans ONLY its own keys).
 describe.skipIf(!process.env.MONGODB_URI)("real Mongo: /demo/signup + /demo/area-brief (8g)", () => {
