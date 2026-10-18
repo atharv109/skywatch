@@ -14,6 +14,10 @@ export async function startServer(onStarted?: () => void) {
   if (!config.toolSecret) {
     console.error("WARNING: TOOL_SECRET is unset — /tools/*, /verify/run and /roads/check accept unauthenticated calls (demo-grade; set TOOL_SECRET before exposing the API)");
   }
+  // Task 8g: the phone-native demo onboarding is a demo-only backdoor — never on in production.
+  if (config.demoSignup) {
+    console.error("WARNING: DEMO_SIGNUP=1 — the /demo/* routes are ON (server-side-signed phone onboarding; turn DEMO_SIGNUP off outside the demo)");
+  }
   // Demo seed: with REPLAY=1 and an empty Mongo, load the shelter/camera fixtures.
   // Never blocks or fails boot — Mongo may still be down; the first replay call also seeds.
   seedOnBoot(config)
