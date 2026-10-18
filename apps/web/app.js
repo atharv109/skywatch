@@ -138,6 +138,7 @@
     meshView: "neighbors",     // 'neighbors' | 'directs' | 'skywatch' — Mesh sub-surface
     dmPeer: null,              // selected DIRECTS peer device hash
     dmSeenAt: 0,               // newest received-DM ts already seen (Directs badge)
+    nbSeenAt: 0,               // newest neighbor broadcast ts already seen (Neighbors badge)
     composerPhoto: null,       // { ref, data, kb } attached before send; uploads after the sync
     polls: {},                 // timers
     healthTimer: null,
@@ -1567,6 +1568,10 @@
   let ctx = null;
   const view = { cx: 0, cy: 0, zoom: 1, init: false };
   let pinCache = [];
+  /* photo pipeline: tap targets + thumbnail <img> cache for the mesh photo markers */
+  let photoPinCache = [];
+  const photoImgCache = new Map(); // photoRef-url -> HTMLImage (drawn only once loaded)
+  const photoImgFailed = new Set(); // tombstones for refs whose bytes never resolve (404) — no re-fetch loop
 
   /* tile pack manifest (must match apps/web/tiles on disk) */
   const PACK = {
@@ -1779,6 +1784,8 @@
     // mesh layer
     if (meshData && meshData.data) {
       const ms = meshData.data;
+      // photo tap targets are rebuilt per frame (drawPhotoMarker pushes them)
+      photoPinCache = [];
       // coverage
       (ms.coverage || []).forEach((cv) => {
         const X = p.x(cv.lon), Y = p.y(cv.lat);
@@ -1787,7 +1794,7 @@
         ctx.fillStyle = "rgba(164,148,242,0.55)";
         ctx.fill();
       });
-      // hazard reports with score bubbles
+      // hazard reports with score bubbles + photo markers
       (ms.hazardReports || []).forEach((hr) => {
         const X = p.x(hr.lon), Y = p.y(hr.lat);
         const score = hr.score == null ? 0 : hr.score;
@@ -1805,6 +1812,8 @@
           ctx.textAlign = "center";
           ctx.fillText((score * 100).toFixed(0), X, Y + 3);
         }
+        // photo pipeline: a photo-backed report gets a thumbnail marker (tap -> lightbox)
+        if (hr.hasPhoto && hr.photoUrl) drawPhotoMarker(hr, X, Y);
       });
       // rescue beacons — orange pulsing dot + priority label
       (ms.beacons || []).forEach((bc, i) => {
@@ -2113,6 +2122,93 @@
     ctx.restore();
   }
 
+  /* photo pipeline: the mesh photo marker — a 16px thumbnail rendered right from
+   * the photo's bytes (the /mesh/photo GET is open + immutable-cache); until the
+   * image finishes loading (or on error) a camera-glyph placeholder keeps the
+   * marker + its tap target present. photoPinCache drives the tap lightbox. */
+  function drawPhotoMarker(hr, X, Y) {
+    photoPinCache.push({ x: X, y: Y, hr });
+    const S = 16, HALF = S / 2, LIFT = 18; // floats above the score bubble like a beacon chip
+    let img = photoImgCache.get(hr.photoUrl);
+    if (!img && !photoImgFailed.has(hr.photoUrl)) {
+      img = new Image();
+      img.__ok = false;
+      img.onload = () => {
+        img.__ok = true;
+        if (screens.map && screens.map.classList.contains("active")) drawMap(); // first frame after load — no recursion (the src is already cached)
+      };
+      // a 404/absent photo tombstones the ref — no per-frame re-fetch loop
+      img.onerror = () => { photoImgFailed.add(hr.photoUrl); photoImgCache.delete(hr.photoUrl); };
+      img.src = apiBase() + hr.photoUrl;
+      photoImgCache.set(hr.photoUrl, img);
+    }
+    if (img && !img.__ok) img = null; // still loading (or failed) -> the placeholder renders
+    ctx.save();
+    ctx.beginPath();
+    roundedRect(X - HALF - 1.5, Y - LIFT - HALF - 1.5, S + 3, S + 3, 4);
+    ctx.fillStyle = "rgba(13,13,15,0.93)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (img.__ok) {
+      ctx.drawImage(img, X - HALF, Y - LIFT - HALF, S, S);
+    } else {
+      // placeholder: camera dot + lens
+      ctx.strokeStyle = "rgba(219,228,240,0.85)";
+      ctx.fillStyle = "rgba(219,228,240,0.85)";
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(X - 4, Y - LIFT - 3.5, 8, 6.5);
+      ctx.beginPath();
+      ctx.arc(X, Y - LIFT - 0.25, 1.6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // verified badge: a green dot when the AI vision verdict confirmed the claim
+    if (hr.photoVision && hr.photoVision.verdict === "confirmed") {
+      ctx.beginPath();
+      ctx.arc(X + HALF, Y - LIFT - HALF, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(66,206,147,0.98)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(13,13,15,0.9)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function hitPhotoPin(X, Y) {
+    let best = null, bestD = 16;
+    for (const pc of photoPinCache) {
+      // the marker floats LIFT=18px above the report's anchor point
+      const d = Math.hypot(pc.x - X, pc.y - 18 - Y);
+      if (d < bestD) { best = pc; bestD = d; }
+    }
+    return best;
+  }
+
+  /** click-expanded lightbox: the full photo + its score/reason story (the same sheet machinery as the pin sheet). */
+  function openPhotoSheet(hr) {
+    const conf = hr.score == null ? "–" : String(hr.score);
+    const v = hr.photoVision;
+    const vChip = v
+      ? `<span class="chip ${v.verdict === "confirmed" ? "chip-ok" : v.verdict === "rejected" ? "chip-warn" : "chip-n"}">AI ${esc(v.verdict)}${v.detail ? " · " + esc(v.detail) : ""}</span>`
+      : "";
+
+    openSheet(`
+      <div style="text-align:center">
+        <img class="lightbox-img" src="${esc(apiBase() + hr.photoUrl)}" alt="mesh report photo">
+        <div class="chips" style="justify-content:center;margin-top:12px">
+          ${hr.photoKind ? `<span class="chip chip-mono chip-mesh">${esc(hr.photoKind)}</span>` : ""}
+          <span class="chip chip-n chip-mono">score ${esc(conf)}</span>
+          ${vChip}
+        </div>
+        ${hr.reasons && hr.reasons.length
+          ? `<div style="margin-top:10px;text-align:left">${hr.reasons.map((r) => `<div class="mini mono dim">· ${esc(r)}</div>`).join("")}</div>`
+          : ""}
+        <p class="mini dim" style="margin-top:10px">Photo relayed over the mesh — the AI photo-verdict rides its score reasons.</p>
+      </div>`, null, "sheet-detail");
+  }
+
   function beaconChip(X, Y, label, dot) {
     ctx.save();
     ctx.font = "700 10px ui-monospace, monospace";
@@ -2284,7 +2380,11 @@
     if (dragDist > 9) return; // a drag, not a tap
     if (!$("#sheet").hidden) closeSheet(); // a tap on the map closes an open pin sheet
     const r = canvas.getBoundingClientRect();
-    openPinSheet(e.clientX - r.left, e.clientY - r.top);
+    const X = e.clientX - r.left, Y = e.clientY - r.top;
+    // photo pipeline: a tap on a photo marker opens its lightbox (score + reasons + full image)
+    const photo = hitPhotoPin(X, Y);
+    if (photo) { haptic(6); openPhotoSheet(photo.hr); return; }
+    openPinSheet(X, Y);
   });
 
   $("#mapZoomIn").addEventListener("click", () => { view.zoom = clamp(view.zoom * 1.35, 0.35, 2.8); drawMap(); });
@@ -2517,6 +2617,9 @@
 
     /* NEIGHBORS — the broadcast thread + my unsent broadcasts */
     const broadcasts = feed.filter((m) => !m.to && !CORE_RE.test(m.from)).slice(-14);
+    /* neighbors unread badge — same design as the Directs badge (2 s poll lands
+     * them without user action; being ON the Neighbors surface means seen) */
+    const nbUnseen = view === "neighbors" ? 0 : (meId ? feed.filter((m) => !m.to && !CORE_RE.test(m.from) && m.ts > (state.nbSeenAt || 0)).length : 0);
     state.queue.filter((p) => p.kind === "msg" && !p.to && (p.state === "queued" || p.state === "fail")).forEach((p) => {
       broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, mine: true, queued: true });
     });
@@ -2606,7 +2709,7 @@
     const bundleHtml = state.bundle ? renderBundle(state.bundle, state.syncState) : "";
 
     const meshTabs = `<div class="mesh-tabs" role="tablist" aria-label="Mesh surfaces">
-      <button class="mesh-tab" data-mview="neighbors" role="tab" aria-pressed="${view === "neighbors"}">${ICONS.meshOn} Neighbors</button>
+      <button class="mesh-tab" data-mview="neighbors" role="tab" aria-pressed="${view === "neighbors"}">${ICONS.meshOn} Neighbors${nbUnseen ? `<span class="tab-badge">${nbUnseen}</span>` : ""}</button>
       <button class="mesh-tab" data-mview="directs" role="tab" aria-pressed="${view === "directs"}">${ICONS.sms} Directs${dmUnseen ? `<span class="tab-badge">${dmUnseen}</span>` : ""}</button>
       <button class="mesh-tab sky" data-mview="skywatch" role="tab" aria-pressed="${view === "skywatch"}">${ICONS.shieldS} Skywatch</button>
     </div>`;
@@ -2710,6 +2813,11 @@
       // opening/being in Directs marks every DM addressed to me as seen
       const newest = feed.filter((m) => m.to === meId && !CORE_RE.test(m.from)).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
       if (newest > (state.dmSeenAt || 0)) state.dmSeenAt = newest;
+    }
+    if (view === "neighbors" && meId) {
+      // being ON the Neighbors surface marks every broadcast as seen (badge clears)
+      const newest = feed.filter((m) => !m.to && !CORE_RE.test(m.from)).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
+      if (newest > (state.nbSeenAt || 0)) state.nbSeenAt = newest;
     }
     renderMeshSigChip();
   }
@@ -2852,6 +2960,9 @@
       ? `${esc(String(syncOut.received))} received · ${esc(String(syncOut.inserted))} stored · ${esc(String(syncOut.deduped))} deduped${syncOut.rejected ? " · " + esc(String(syncOut.rejected)) + " rejected" : ""}`
       : "";
     const sh = bundle.nearestVerifiedShelter;
+    const photoNews = (bundle.photoReports || []).map((r) =>
+      `<div class="uplink-row">${photoThumb(r.photoUrl.replace("/mesh/photo/", ""))}<span>${esc(r.status)}</span><span class="mono dim">score ${esc(String(r.score))}</span>${r.photoVision ? `<span class="chip ${r.photoVision.verdict === "confirmed" ? "chip-ok" : r.photoVision.verdict === "rejected" ? "chip-warn" : "chip-n"}">AI ${esc(r.photoVision.verdict)}</span>` : ""}</div>`
+    ).join("") || "";
     return `<div class="bundle">
       <div style="display:flex;align-items:center;gap:9px">
         <div style="width:34px;height:34px;border-radius:11px;background:var(--ok-dim);color:var(--ok);display:flex;align-items:center;justify-content:center">${ICONS.sync}</div>
@@ -2867,6 +2978,7 @@
       ${roads ? `<div class="bundle-sec"><h4>Roads</h4>${roads}</div>` : ""}
       <div class="bundle-sec"><h4>Acks</h4>${acks}</div>
       <div class="bundle-sec"><h4>Messages</h4>${msgs}</div>
+      ${photoNews ? `<div class="bundle-sec"><h4>Photo news — AI-checked</h4>${photoNews}</div>` : ""}
       ${state.mode === "gateway" ? `<button class="btn btn-ok btn-block" id="gwRestore" style="margin-top:14px">${ICONS.check} Signal restored — back online</button>` : ""}
     </div>`;
   }

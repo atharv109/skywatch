@@ -278,6 +278,12 @@ h3.mini{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:
       (b.messages && b.messages.length
         ? '<div class="kv"><b>Mesh messages:</b> ' + b.messages.map(function (m) { return '"' + esc(m.text) + '"'; }).join(" · ") + "</div>"
         : "") +
+      (b.photoReports && b.photoReports.length
+        ? "<div class='kv'><b>Photo news (AI-checked):</b> " + b.photoReports.map(function (r) {
+            return esc(r.status) + " · score " + esc(r.score) + (r.photoVision ? " · AI " + esc(r.photoVision.verdict) : "") +
+              (r.photoUrl ? " <a href='" + esc(apiBase() + r.photoUrl) + "' target='_blank' rel='noopener'>photo</a>" : "");
+          }).join(" · ") + "</div>"
+        : "") +
       '<div class="kv mono">sync: received=' + j.received + " inserted=" + j.inserted + " deduped=" + j.deduped + " rejected=" + j.rejected + " scored=" + j.scored + " unscored=" + j.unscored + "</div>" +
       '<details><summary>raw bundle JSON</summary><pre class="mono" style="white-space:pre-wrap">' + esc(JSON.stringify(b, null, 2)) + "</pre></details></div>";
     return out;
@@ -340,8 +346,10 @@ h3.mini{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:
         ? st.hazardReports.slice(0, 25).map(function (h) {
             var cls = h.verify === "ok" ? "ok" : h.verify === "unsigned" ? "warn" : "bad";
             var score = h.score === null ? "unscored" : h.score;
-            return '<div class="rep"><b>' + esc(h.status) + "</b> <span class='chip " + cls + "'>" + esc(h.verify) + "</span> <span class='chip gray'>score " + esc(score) + "</span>" +
-              "<div class='dim' style='font-size:12px'>" + h.lat.toFixed(4) + ", " + h.lon.toFixed(4) + " · " + time(h.ts) + " · " + esc(h.id.slice(0, 8)) + "…</div>" +
+            var vChip = h.photoVision ? "<span class='chip " + (h.photoVision.verdict === "confirmed" ? "ok" : h.photoVision.verdict === "rejected" ? "warn" : "gray") + "'>AI " + esc(h.photoVision.verdict) + "</span>" : "";
+            var thumb = h.hasPhoto && h.photoUrl ? "<img src='" + esc(h.photoUrl) + "' alt='report photo' loading='lazy' onerror=\"this.remove()\" style='display:block;width:84px;height:84px;object-fit:cover;border-radius:8px;margin:6px 0 2px'>" : "";
+            return '<div class="rep"><b>' + esc(h.status) + "</b> <span class='chip " + cls + "'>" + esc(h.verify) + "</span> <span class='chip gray'>score " + esc(score) + "</span>" + vChip +
+              "<div class='dim' style='font-size:12px'>" + h.lat.toFixed(4) + ", " + h.lon.toFixed(4) + " · " + time(h.ts) + " · " + esc(h.id.slice(0, 8)) + "…</div>" + thumb +
               (h.reasons && h.reasons.length ? "<details open><summary>reasons</summary><ul class='mono'>" + h.reasons.map(function (z) { return "<li>" + esc(z) + "</li>"; }).join("") + "</ul></details>" : "") +
               "</div>";
           }).join("")

@@ -62,6 +62,8 @@ summary{cursor:pointer;color:var(--accent);font-size:12.5px}
 .dim{color:var(--dim)}
 label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
 .msgline{padding:3px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
+.photo-lightbox{position:fixed;inset:0;background:rgba(4,6,12,.88);display:flex;align-items:center;justify-content:center;z-index:1000;cursor:zoom-out}
+.photo-lightbox img{max-width:92vw;max-height:88vh;border-radius:10px;border:1px solid var(--border)}
 </style>
 </head>
 <body>
@@ -296,13 +298,37 @@ label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
     out += mesh.hazardReports.length
       ? mesh.hazardReports.slice(0, 20).map(function (h) {
           var chipCls = h.verify === "ok" ? "ok" : h.verify === "unsigned" ? "warn" : "bad";
+          var vChip = h.photoVision
+            ? "<span class='chip " + (h.photoVision.verdict === "confirmed" ? "ok" : h.photoVision.verdict === "rejected" ? "warn" : "gray") + "'>AI " + esc(h.photoVision.verdict) + "</span>"
+            : "";
           return '<div class="haz"><b>' + esc(h.status) + "</b> <span class='chip " + chipCls + "'>" + esc(h.verify) + "</span> " +
-            "<span class='chip gray'>score " + (h.score === null ? "–" : esc(h.score)) + "</span>" +
+            "<span class='chip gray'>score " + (h.score === null ? "–" : esc(h.score)) + "</span>" + vChip +
             "<div class='dim' style='font-size:12px'>" + h.lat.toFixed(4) + ", " + h.lon.toFixed(4) + " · " + time(h.ts) + "</div>" +
             (h.reasons && h.reasons.length ? "<details><summary>reasons</summary><ul class='mono'>" + h.reasons.map(function (z) { return "<li>" + esc(z) + "</li>"; }).join("") + "</ul></details>" : "") +
+            (h.hasPhoto && h.photoUrl ? "<img src='" + esc(h.photoUrl) + "' alt='report photo' loading='lazy' onerror=\"this.remove()\" style='display:block;width:96px;height:96px;object-fit:cover;border-radius:8px;margin-top:6px;cursor:zoom-in' data-photo='" + esc(h.photoUrl) + "'>" : "") +
             "</div>";
         }).join("")
       : '<p class="dim">none</p>';
+
+    if (mesh.hazardReports.some(function (h) { return h.hasPhoto; }) || (mesh.messages || []).some(function (m) { return m.hasPhoto; })) {
+      var refs = [];
+      mesh.hazardReports.forEach(function (h) { if (h.hasPhoto) refs.push({ url: h.photoUrl, kind: h.photoKind, v: h.photoVision, score: h.score }); });
+      out += "<h3 style='font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px'>Mesh photos (click to expand)</h3><div style='display:flex;flex-wrap:wrap;gap:6px'>" +
+        refs.map(function (p) {
+          return "<img src='" + esc(p.url) + "' alt='" + esc(p.kind || "photo") + "' loading='lazy' onerror=\"this.remove()\" data-photo='" + esc(p.url) + "' style='width:110px;height:110px;object-fit:cover;border-radius:9px;cursor:zoom-in'>";
+        }).join("") + "</div>";
+    }
+    // photo lightbox (click-expands over the dashboard; tap anywhere closes it) —
+    // assigned (not addEventListener) so the ~2 s refresh never stacks handlers
+    $("meshBody").onclick = function (e) {
+      var t = e.target && e.target.closest ? e.target.closest("img[data-photo]") : null;
+      if (!t) return;
+      var lb = document.createElement("div");
+      lb.className = "photo-lightbox";
+      lb.innerHTML = "<img src='" + esc(t.getAttribute("data-photo")) + "' alt='mesh photo'>";
+      lb.addEventListener("click", function () { lb.remove(); });
+      document.body.appendChild(lb);
+    };
 
     if (mesh.messages && mesh.messages.length) {
       out += "<h3 style='font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px'>Mesh chat</h3>" +
