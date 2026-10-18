@@ -32,7 +32,8 @@ TypeScript + Hono on Node (Render), MongoDB Atlas (geo-queries, 2dsphere), Ed255
 
 ## What we learned / what's next
 - Learned: fail-safe beats fail-silent everywhere — every unwired integration records its state instead of pretending.
-- Next: flash two $20 Meshtastic boards to make the mile-scale mesh literal; wire the community-report "trusted partner" boost; per-language mesh UI; the phone-check photo verifier.
+- Learned: the honest transport story. A stock iPhone has Wi-Fi, Bluetooth, cellular, NFC, GPS — and only one of them is both direct phone-to-phone AND usable from an app. The mesh runs there, hop by hop.
+- Next (roadmap): the browser build ships the protocol in final form (signed packets, store-and-forward, dedup, priority rescue clusters, two-way gateway). Peer discovery today stands in via a household hotspot — the demo states it openly. The production app swaps that stand-in for OS-level discovery: Apple's iOS 26 off-grid framework / Android Nearby (native, auto-discovery, no hotspot), a $20 Meshtastic sub-GHz node for mile-scale gaps, and SMS/satellite for deep blackout. Native BLE build is the next 48-hour task; nothing in the protocol changes.
 
 ## Built with
 JavaScript, TypeScript, Node.js, Hono, MongoDB Atlas, Photon 2.0, ElevenLabs, Gemini, Ed25519/WebCrypto, Leaflet, Next.js (client), Turf/Turf-free geo, NOAA/NWS/USGS/WSDOT/AirNow/FEMA/Census APIs
