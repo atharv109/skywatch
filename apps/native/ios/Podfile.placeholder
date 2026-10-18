@@ -1,0 +1,6 @@
+# NOT USED — Capacitor 8 generates an SPM project (CapApp-SPM), no CocoaPods.
+
+# The BLE plugin is wired by the Capacitor CLI in ios/App/CapApp-SPM/Package.swift
+# (dependency @capgo/capacitor-bluetooth-low-energy resolved from node_modules).
+# `pod install` is only needed if you migrate the project back to CocoaPods
+# (`npx cap migrate`), in which case the CLI regenerates this file. Leave empty.

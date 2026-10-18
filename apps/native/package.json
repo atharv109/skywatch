@@ -1,0 +1,21 @@
+{
+  "name": "skywatch-native",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Skywatch native app — Capacitor wrap of apps/web with a BLE peer-to-peer transport",
+  "scripts": {
+    "prestart": "node sync-web.mjs",
+    "sync": "node sync-web.mjs",
+    "open:ios": "npm run sync && cap open ios",
+    "open:android": "npm run sync && cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3",
+    "@capgo/capacitor-bluetooth-low-energy": "^8.2.7"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3"
+  }
+}

@@ -1,0 +1,6 @@
+www/
+node_modules/
+
+# Capacitor-generated web-asset copies of www/ (regenerate: npm run sync && npx cap sync)
+ios/App/App/public/
+android/app/src/main/assets/public/
