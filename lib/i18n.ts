@@ -150,6 +150,7 @@ export const liveChrome = {
   call911: ui.call911,
   shelterHeading: ui.shelterHeading,
   roadsHeading: ui.roadsHeading,
+  whatToDo: ui.whatToDo,
 };
 
 const floodHazards = [
@@ -599,3 +600,127 @@ export function keyEnding(lang: Lang, key: string): string {
   if (lang === "vi") return `Khóa kết thúc bằng ${key}`;
   return `ينتهي المفتاح بـ ${key}`;
 }
+
+/** Status-chip narration + mode labels for the AUTO network machine (lib/net.ts). */
+export const netCopy = {
+  auto: t({
+    en: "Auto — detecting signal for you",
+    es: "Automático — detectando la señal por ti",
+    zh: "自动 — 正在为你检测信号",
+    tl: "Auto — kusang kinikilala ang signal",
+    vi: "Tự động — đang tự dò sóng giúp bạn",
+    ar: "تلقائي — نكتشف الإشارة عنك",
+  }),
+  pinnedGateway: t({
+    en: "Going gateway on purpose — carrying the mesh up",
+    es: "Volviéndose enlace a propósito — llevando la malla",
+    zh: "主动进入网关 — 正在上传网格消息",
+    tl: "Sinadyang maging gateway — pinapaakyat ang mesh",
+    vi: "Chủ động làm cổng nối — đang đưa mạng lưới lên",
+    ar: "عمدًا كنقطة اتصال — يرفع رسائل الشبكة",
+  }),
+  pinnedOffline: t({
+    en: "Pinned offline for the demo",
+    es: "Fijado sin conexión para la demo",
+    zh: "演示中已固定为离线",
+    tl: "Naka-pin na offline para sa demo",
+    vi: "Đã cố định ngoại tuyến cho phần demo",
+    ar: "مثبّت دون اتصال للعرض",
+  }),
+  pinnedOnline: t({
+    en: "Pinned online",
+    es: "Fijado con conexión",
+    zh: "已固定为在线",
+    tl: "Naka-pin na online",
+    vi: "Đã cố định trực tuyến",
+    ar: "مثبّت متصل",
+  }),
+  signalFound: t({
+    en: "Signal found — syncing the mesh…",
+    es: "Señal encontrada — sincronizando la malla…",
+    zh: "发现信号 — 正在同步网格…",
+    tl: "May naanap na signal — nagsi-sync ang mesh…",
+    vi: "Có sóng — đang đồng bộ mạng lưới…",
+    ar: "وُجدت إشارة — جارٍ مزامنة الشبكة…",
+  }),
+  gatewayOnPurpose: t({
+    en: "You have signal — carrying the mesh's messages up",
+    es: "Tienes señal — llevando los mensajes de la malla",
+    zh: "你有信号 — 正把网格消息传上去",
+    tl: "May signal ka — inaahon ang mga mensahe ng mesh",
+    vi: "Bạn có sóng — đang chuyển tin nhắn của mạng lưới lên",
+    ar: "لديك إشارة — ترفع رسائل الشبكة",
+  }),
+  backOnline: t({
+    en: "Back online — everyone's news is out",
+    es: "De vuelta en línea — ya salieron las noticias de todos",
+    zh: "已恢复在线 — 所有人都已上传",
+    tl: "Bumalik ang signal — naiabot na ang balita ng lahat",
+    vi: "Đã trực tuyến lại — tin của mọi người đã đi qua",
+    ar: "عاد الاتصال — وصلت أخبار الجميع",
+  }),
+  held: t({
+    en: "The gateway did not confirm — the queue stays held",
+    es: "La pasarela no confirmó — la cola sigue guardada",
+    zh: "网关未确认 — 队列继续保留",
+    tl: "Hindi kumpirmado ng gateway — naka-hold pa rin ang pila",
+    vi: "Cổng nối chưa xác nhận — hàng đợi vẫn giữ nguyên",
+    ar: "البوابة لم تؤكد — تبقى الرسائل محفوظة",
+  }),
+  connectionLost: t({
+    en: "Connection lost — entering mesh mode",
+    es: "Sin conexión — entrando en modo malla",
+    zh: "连接丢失 — 进入网格模式",
+    tl: "Walang signal — papasok sa mesh mode",
+    vi: "Mất kết nối — chuyển sang chế độ mạng lưới",
+    ar: "انقطع الاتصال — الدخول إلى وضع الشبكة",
+  }),
+  drain: t({
+    en: "Queued reports are going out…",
+    es: "Los reportes en cola están saliendo…",
+    zh: "排队的上报正在发送…",
+    tl: "Lumalabas na ang mga nakapilang report…",
+    vi: "Các báo cáo đang chờ đang được gửi…",
+    ar: "البلاغات في الطابور تُرسل الآن…",
+  }),
+  drained: t({
+    en: "Queued reports are out",
+    es: "Los reportes en cola ya salieron",
+    zh: "排队的上报已发送",
+    tl: "Naiabot na ang mga nakapilang report",
+    vi: "Các báo cáo đang chờ đã được gửi",
+    ar: "تم إرسال بلاغات الطابور",
+  }),
+  drainHold: t({
+    en: "Queue still pending — the gateway did not confirm",
+    es: "La cola sigue pendiente — la pasarela no confirmó",
+    zh: "队列仍在等待 — 网关未确认",
+    tl: "Nakapila pa rin — hindi kumpirmado ng gateway",
+    vi: "Hàng đợi vẫn chờ — cổng nối chưa xác nhận",
+    ar: "الطابور ما زال معلقًا — البوابة لم تؤكد",
+  }),
+  modeOnline: t({
+    en: "Online",
+    es: "Con conexión",
+    zh: "在线",
+    tl: "May signal",
+    vi: "Trực tuyến",
+    ar: "متصل",
+  }),
+  modeOffline: t({
+    en: "Offline",
+    es: "Sin conexión",
+    zh: "离线",
+    tl: "Walang signal",
+    vi: "Ngoại tuyến",
+    ar: "غير متصل",
+  }),
+  modeGateway: t({
+    en: "Gateway",
+    es: "Enlace",
+    zh: "网关",
+    tl: "Gateway",
+    vi: "Cổng nối",
+    ar: "بوابة",
+  }),
+};

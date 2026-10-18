@@ -17,9 +17,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { freshness } from "@/lib/format";
-import { FONT_FAMILY, isLang, keyEnding, LANGUAGE_NAMES, LANGS, offlineCopy } from "@/lib/i18n";
+import { FONT_FAMILY, isLang, keyEnding, LANGUAGE_NAMES, LANGS, netCopy, offlineCopy } from "@/lib/i18n";
 import { useLocation } from "@/lib/location";
 import { chips, kindLabel, meshCopy } from "@/lib/mesh-copy";
+import { setNetOverride, useNetMode, type NetOverride } from "@/lib/net";
 import {
   REPORT_KINDS,
   rememberSatellite,
@@ -32,11 +33,11 @@ import {
 import { downscalePhoto } from "@/lib/photo";
 import { writeLang } from "@/lib/prefs";
 import { useSimMode } from "@/lib/sim";
-import { useClockAnchor, useDeviceKey, useNow, useOnline, usePreferredLang } from "@/lib/use-live";
+import { useClockAnchor, useDeviceKey, useNow, usePreferredLang } from "@/lib/use-live";
 import { cn } from "cn";
 
 export function OfflineScreen() {
-  const online = useOnline();
+  const net = useNetMode();
   const lang = usePreferredLang();
   const sim = useSimMode();
   const location = useLocation();
@@ -67,14 +68,14 @@ export function OfflineScreen() {
   }, [sim, mesh.satellite]);
 
   useEffect(() => {
-    if (!mesh.deviceId || online === false || location.status === "unknown") return;
+    if (!mesh.deviceId || net.mode === "offline" || location.status === "unknown") return;
     const key = location.fix ? `${location.fix.lat.toFixed(3)},${location.fix.lon.toFixed(3)}` : "sample";
     if (started.current === key) return;
     started.current = key;
     void syncMesh(location.fix).then((next) => {
-      if (isLang(next)) writeLang(next);
+      if (next?.ok && isLang(next.lang)) writeLang(next.lang);
     });
-  }, [mesh.deviceId, online, location.fix, location.status]);
+  }, [mesh.deviceId, net.mode, location.fix, location.status]);
 
   const hash = mesh.hash;
   const directs = useMemo(() => {
@@ -93,11 +94,51 @@ export function OfflineScreen() {
     return (message.to === hash && message.from === peer) || (message.from === hash && message.to === peer);
   });
 
+  function noteText(note: string): string | null {
+    switch (note) {
+      case "auto":
+        return netCopy.auto[lang];
+      case "pinned-gateway":
+        return netCopy.pinnedGateway[lang];
+      case "pinned-offline":
+        return netCopy.pinnedOffline[lang];
+      case "pinned-online":
+        return netCopy.pinnedOnline[lang];
+      case "signal-found":
+        return netCopy.signalFound[lang];
+      case "gateway-on-purpose":
+        return netCopy.gatewayOnPurpose[lang];
+      case "back-online":
+        return netCopy.backOnline[lang];
+      case "held":
+        return netCopy.held[lang];
+      case "connection-lost":
+        return netCopy.connectionLost[lang];
+      case "drain":
+        return netCopy.drain[lang];
+      case "drained":
+        return netCopy.drained[lang];
+      case "drain-hold":
+        return netCopy.drainHold[lang];
+      default:
+        return null;
+    }
+  }
+
   const banner = mesh.syncing
     ? { text: offlineCopy.syncing[lang], tone: "warning" as const }
-    : online === false
+    : net.mode === "offline"
       ? { text: offlineCopy.offline[lang], tone: "warning" as const }
-      : { text: offlineCopy.online[lang], tone: "safe" as const };
+      : net.mode === "gateway"
+        ? { text: noteText(net.note) || netCopy.gatewayOnPurpose[lang], tone: "warning" as const }
+        : { text: noteText(net.note) || offlineCopy.online[lang], tone: "safe" as const };
+
+  const modeLabel = net.mode === "online" ? netCopy.modeOnline[lang] : net.mode === "gateway" ? netCopy.modeGateway[lang] : netCopy.modeOffline[lang];
+  const pickModes: Array<{ value: NetOverride; label: string }> = [
+    { value: "online", label: netCopy.modeOnline[lang] },
+    { value: "offline", label: netCopy.modeOffline[lang] },
+    { value: "gateway", label: netCopy.modeGateway[lang] },
+  ];
 
   const self = useMemo(
     () => (location.fix ? { lat: location.fix.lat, lon: location.fix.lon } : null),
@@ -135,9 +176,9 @@ export function OfflineScreen() {
   }
 
   async function sync() {
-    if (online !== true) return;
+    if (net.mode === "offline") return;
     const next = await syncMesh(location.fix);
-    if (isLang(next)) writeLang(next);
+    if (next?.ok && isLang(next.lang)) writeLang(next.lang);
   }
 
   return (
@@ -277,7 +318,7 @@ export function OfflineScreen() {
               </li>
             ))}
           </ul>
-        ) : mesh.gateway === "idle" && online !== false ? (
+        ) : mesh.gateway === "idle" && net.mode !== "offline" ? (
           <div className="flex flex-col gap-3 pt-4">
             <Skeleton className="h-16" />
             <Skeleton className="h-16" />
@@ -354,9 +395,38 @@ export function OfflineScreen() {
         </div>
         <div className="mt-2 flex items-center justify-between gap-3">
           <p className="text-sm text-muted-foreground tabular-nums">{text.length}/280</p>
-          <Button type="button" className="h-12 min-h-12 px-4 text-base" disabled={online !== true || mesh.syncing} onClick={() => void sync()}>
-            {mesh.syncing ? offlineCopy.syncing[lang] : offlineCopy.sync[lang]}
-          </Button>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex min-h-12 items-center gap-2 rounded-full bg-white/5 px-3 text-base">
+                {modeLabel}
+                <span
+                  className={cn("size-2 rounded-full", net.mode === "online" ? "bg-safe" : "bg-warning")}
+                  aria-hidden
+                />
+                <span className="text-sm text-muted-foreground">{net.override === null ? "auto" : "manual"}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-52">
+                <DropdownMenuRadioGroup
+                  value={net.override ?? net.mode}
+                  onValueChange={(value) => setNetOverride(value === "auto" ? null : (value as NetOverride))}
+                >
+                  <DropdownMenuRadioItem value="auto" className="min-h-12 text-base">
+                    {netCopy.auto[lang]}
+                  </DropdownMenuRadioItem>
+                  {pickModes
+                    .filter((item) => item.value !== null)
+                    .map((item) => (
+                      <DropdownMenuRadioItem key={item.value} value={item.value as string} className="min-h-12 text-base">
+                        {item.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button type="button" className="h-12 min-h-12 px-4 text-base" disabled={net.mode === "offline" || mesh.syncing} onClick={() => void sync()}>
+              {mesh.syncing ? offlineCopy.syncing[lang] : offlineCopy.sync[lang]}
+            </Button>
+          </div>
         </div>
         <div className="mt-2 flex justify-center">
           <Link className="link-quiet" href="/">

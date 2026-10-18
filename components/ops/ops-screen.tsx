@@ -176,10 +176,26 @@ export function OpsScreen() {
     return () => window.removeEventListener("keydown", onKey);
   }, [checkInFor, selectedId]);
 
-  function chooseScenario(next: ScenarioId) {
-    writeScenario(next);
+  async function chooseScenario(next: ScenarioId) {
     setSelectedId(null);
     setCheckInFor(null);
+    // The real POST fires first; the local scenario is the secondary cache.
+    let confirmed = false;
+    try {
+      const response = await fetch("/api/situation/replay", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scenario: next }),
+      });
+      confirmed = response.ok;
+    } catch {
+      confirmed = false;
+    }
+    toast(
+      confirmed ? "Scenario replayed on the backend." : "The backend did not confirm the replay — showing the local scenario.",
+      { duration: confirmed ? 1600 : 2600 },
+    );
+    writeScenario(next);
   }
 
   function toggleLayer(key: keyof Layers) {
@@ -199,10 +215,25 @@ export function OpsScreen() {
     if (id) setExpanded(false);
   }
 
-  function saveCheckIn(id: string, value: CheckIn) {
-    writeCheckIns({ ...overrides, [id]: value });
+  async function saveCheckIn(id: string, value: CheckIn) {
     setCheckInFor(null);
-    toast("Check-in saved", { duration: 1600 });
+    // The real POST fires first; the device record is the secondary cache.
+    let confirmed = false;
+    try {
+      const response = await fetch("/api/tools/checkin", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resourceId: id, status: value.status, notes: value.note }),
+      });
+      confirmed = response.ok;
+    } catch {
+      confirmed = false;
+    }
+    writeCheckIns({ ...overrides, [id]: value });
+    toast(
+      confirmed ? "Check-in saved — the backend confirmed it." : "Check-in kept on this device — the backend did not confirm it.",
+      { duration: confirmed ? 1600 : 2600 },
+    );
   }
 
   function locate() {
@@ -298,14 +329,14 @@ export function OpsScreen() {
             {picture.hazards.length}
           </span>
           {showChip ? <span className="rounded-full bg-paper px-2 py-1 text-xs font-bold text-ink">Updated</span> : null}
-          {sim ? (
+          {sim || situation.status === "ready" ? (
             <DropdownMenu>
               <DropdownMenuTrigger className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 text-sm font-semibold text-paper active:bg-white/10">
                 Replay
                 <ChevronDown className="size-4" aria-hidden />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-40">
-                <DropdownMenuRadioGroup value={activeScenario} onValueChange={(value) => chooseScenario(value as ScenarioId)}>
+                <DropdownMenuRadioGroup value={activeScenario} onValueChange={(value) => void chooseScenario(value as ScenarioId)}>
                   <DropdownMenuRadioItem value="flood" className="min-h-12 text-base">
                     Flood
                   </DropdownMenuRadioItem>
