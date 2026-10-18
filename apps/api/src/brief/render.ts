@@ -110,7 +110,7 @@ export async function callGemini(
 
 export interface RenderArgs {
   brief: UserBrief;
-  config: Pick<Config, "geminiApiKey" | "replay">;
+  config: Pick<Config, "geminiApiKey" | "replay" | "geminiLiveInReplay">;
   /** Injectable fetch for tests (mock Gemini); defaults to global fetch. */
   fetcher?: Fetcher;
 }
@@ -119,9 +119,14 @@ export interface RenderedAlert extends GeminiRender {
   source: "gemini" | "fallback";
 }
 
-/** Live only when a key is set AND we are not in fixture replay mode. */
-export function isLiveRender(config: Pick<Config, "geminiApiKey" | "replay">): boolean {
-  return Boolean(config.geminiApiKey) && !config.replay;
+/**
+ * Live only when a key is set AND (we are not in fixture replay mode OR the
+ * GEMINI_LIVE_IN_REPLAY knob is on — Task 9: demo = fixtures move, wording can
+ * still be live; one knob). The knob changes NOTHING else: a live failure
+ * under replay still falls straight into the same validator→retry→fallback chain.
+ */
+export function isLiveRender(config: Pick<Config, "geminiApiKey" | "replay" | "geminiLiveInReplay">): boolean {
+  return Boolean(config.geminiApiKey) && (!config.replay || config.geminiLiveInReplay === true);
 }
 
 type Attempt = { ok: true; render: GeminiRender } | { ok: false; violations: Violation[] };

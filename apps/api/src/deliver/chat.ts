@@ -40,7 +40,7 @@ export interface ChatOutcome {
 }
 
 export interface ChatArgs {
-  config: Pick<Config, "geminiApiKey" | "replay">;
+  config: Pick<Config, "geminiApiKey" | "replay" | "geminiLiveInReplay">;
   deliver: DeliverStore;
   /** Where DB-only resource/road reads come from; null → tools answer "unavailable". */
   appStore: AppStore | null;
@@ -239,6 +239,10 @@ export async function chatReply(args: ChatArgs): Promise<ChatOutcome> {
     const render = fallbackRender(args.lastBrief);
     return { reply: render.text, source: "fallback", toolsUsed: [...toolsUsed] };
   };
+  // Gate mirror of render.ts's isLiveRender (Task 9: demo = fixtures move, wording
+  // can still be live — the GEMINI_LIVE_IN_REPLAY knob). The fail-safe chain below
+  // is unchanged: validator -> one retry -> per-lang fallback (a live failure under
+  // replay = fallback, never a dead beat).
   if (!isLiveRender(args.config)) return composed();
 
   const history = await args.deliver.recentConversation(args.user.id, HISTORY_TURNS);

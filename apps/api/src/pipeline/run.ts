@@ -24,7 +24,7 @@ import { renderAlert } from "../brief/render.ts";
  */
 
 export interface PipelineCtx {
-  config: Pick<Config, "photonProjectId" | "photonProjectSecret" | "geminiApiKey" | "replay">;
+  config: Pick<Config, "photonProjectId" | "photonProjectSecret" | "geminiApiKey" | "replay" | "geminiLiveInReplay">;
   store: AppStore;
   match: () => Promise<MatchStore>;
   deliver: () => Promise<DeliverStore>;

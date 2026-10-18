@@ -21,6 +21,8 @@ export interface Config {
   xaiApiKey: string | null;
   /** Task 8g: phone-native demo onboarding (server-signed /demo/* routes) — OFF outside the demo (the lead sets it for the demo). */
   demoSignup: boolean;
+  /** Task 9: allow LIVE Gemini inside REPLAY=1 (MLH Gemini track + live beat-6 Q&A over fixture data) — off default: today's fail-safe posture unchanged. */
+  geminiLiveInReplay: boolean;
   /** Task 8e: allow LIVE satellite fetches during gateway sync (default 0 = tests hermetic + offline-deterministic; REPLAY does not gate this). */
   liveSync: boolean;
   publicBaseUrl: string;
@@ -67,6 +69,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     liveSync: env["SKYWATCH_LIVE_SYNC"] === "1",
     xaiApiKey: secret(env, "XAI_API_KEY"),
     demoSignup: env["DEMO_SIGNUP"] === "1",
+    geminiLiveInReplay: env["GEMINI_LIVE_IN_REPLAY"] === "1",
     publicBaseUrl: secret(env, "PUBLIC_BASE_URL") ?? `http://localhost:${env["PORT"] ?? "3000"}`,
     replay: parseReplay(env["REPLAY"] ?? "0"),
     port: parsePort(env["PORT"] ?? "3000"),
