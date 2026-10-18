@@ -2,7 +2,9 @@ import type { Db } from "mongodb";
 import { COLLECTIONS } from "../db/client.ts";
 import { haversineKm } from "../match/geo.ts";
 import type { Point } from "../types/docs.ts";
+import { applyPhotoVerdictToDoc } from "./score.ts";
 import type { MeshBeaconDoc, MeshDeviceDoc, MeshPacketDoc, MeshPhotoDoc, RescueKind } from "./types.ts";
+import type { PhotoVerdict } from "./photovision.ts";
 
 /**
  * The mesh store surface (Task 8): packets, pinned device keys, beacon clusters —
@@ -23,6 +25,15 @@ export interface MeshStore {
   putPhoto(doc: MeshPhotoDoc): Promise<void>;
   getPhoto(photoRef: string): Promise<MeshPhotoDoc | null>;
   listPhotos(): Promise<MeshPhotoDoc[]>;
+  /** The packet carrying this photoRef (the photo-pipeline boost target), or null. */
+  findPacketByPhotoRef(photoRef: string): Promise<MeshPacketDoc | null>;
+  /**
+   * Apply a photo-vision verdict to the ONE packet carrying photoRef (forwarding-only
+   * score refinement via score.applyPhotoVerdictToDoc — idempotent, never a recompute).
+   * Beacon clusters that contain the packet keep their best (max) score. Returns the
+   * updated packet, or null when no packet / nothing scoreable references photoRef.
+   */
+  applyPhotoVerdict(photoRef: string, verdict: PhotoVerdict): Promise<MeshPacketDoc | null>;
   /** Nearest cluster of the same kind within radiusM of loc (server-side over the beacons 2dsphere index). */
   findBeaconCluster(kind: RescueKind, loc: Point, radiusM: number): Promise<MeshBeaconDoc | null>;
   insertBeacon(doc: MeshBeaconDoc): Promise<void>;
@@ -83,6 +94,31 @@ export function mongoMeshStore(db: Db): MeshStore {
     },
     async listPhotos() {
       return db.collection<MeshPhotoDoc>(COLLECTIONS.meshPhotos).find({}, { projection: { _id: 0 } }).toArray();
+    },
+    async findPacketByPhotoRef(photoRef) {
+      return db
+        .collection<MeshPacketDoc>(COLLECTIONS.meshPackets)
+        .findOne({ photoRef }, { projection: { _id: 0 } });
+    },
+    async applyPhotoVerdict(photoRef, verdict) {
+      const doc = await db
+        .collection<MeshPacketDoc>(COLLECTIONS.meshPackets)
+        .findOne({ photoRef, score: { $ne: null } }, { projection: { _id: 0 } });
+      if (!doc) return null;
+      const updated = applyPhotoVerdictToDoc(doc, verdict);
+      if (!updated || updated === doc) return doc;
+      await db.collection(COLLECTIONS.meshPackets).updateOne(
+        { id: doc.id },
+        { $set: { score: updated.score, reasons: updated.reasons, photoVision: updated.photoVision } },
+      );
+      // Rescue beacons: the cluster keeps the BEST contributing score ($max, the
+      // mergeBeacon convention) — the photo boost must not be lost to the cluster.
+      if (doc.type === "beacon") {
+        await db
+          .collection(COLLECTIONS.beacons)
+          .updateOne({ packetIds: doc.id }, { $max: { score: updated.score } });
+      }
+      return updated;
     },
     async findBeaconCluster(kind, loc, radiusM) {
       const hits = await db
@@ -157,6 +193,29 @@ export function memoryMeshStore(): MeshStore {
     },
     async listPhotos() {
       return [...photos.values()];
+    },
+    async findPacketByPhotoRef(photoRef) {
+      for (const doc of packets.values()) {
+        if (doc.photoRef === photoRef) return doc;
+      }
+      return null;
+    },
+    async applyPhotoVerdict(photoRef, verdict) {
+      let target: MeshPacketDoc | null = null;
+      for (const doc of packets.values()) {
+        if (doc.photoRef === photoRef) { target = doc; break; }
+      }
+      if (!target) return null;
+      const updated = applyPhotoVerdictToDoc(target, verdict);
+      if (!updated || updated.score === null) return null;
+      packets.set(target.id, updated);
+      // Rescue beacons: the cluster keeps the BEST contributing score (mergeBeacon's max).
+      if (target.type === "beacon") {
+        for (const cluster of beacons.values()) {
+          if (cluster.packetIds.includes(target.id)) cluster.score = Math.max(cluster.score, updated.score);
+        }
+      }
+      return updated;
     },
     async findBeaconCluster(kind, loc, radiusM) {
       let best: MeshBeaconDoc | null = null;

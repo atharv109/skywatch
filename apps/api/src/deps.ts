@@ -12,6 +12,7 @@ import { pgStatusHistoryReader, type TigerStatusRow } from "./verify/tiger.ts";
 import { mongoVerifyStore, type VerifyStore } from "./verify/store.ts";
 import { mongoMeshStore, type MeshStore } from "./mesh/store.ts";
 import { mongoTtsCache, type TtsCache } from "./deliver/grok-tts.ts";
+import { makePhotoVision, type PhotoVision, type PhotoVerdict } from "./mesh/photovision.ts";
 
 /**
  * Injectable dependencies for the route groups. The defaults go to Mongo via the
@@ -52,6 +53,13 @@ export interface AppDeps {
    * absent dep as {configured:false} (nothing is ever faked from Mongo).
    */
   tigerStatus?: (entity: string, hours: number, now: number) => Promise<TigerStatusRow[]>;
+  /**
+   * Photo pipeline (POST /mesh/photo + sync-time scoring): the xAI vision verifier.
+   * OPTIONAL on the interface so every landed hermetic harness stays untouched —
+   * wired in defaultDeps ONLY when XAI_API_KEY is set (absent dep = photo-unscored,
+   * exactly the previous never-blocks posture).
+   */
+  photoVision?: PhotoVision;
 }
 
 export function defaultDeps(config: Config): AppDeps {
@@ -64,6 +72,8 @@ export function defaultDeps(config: Config): AppDeps {
     verify: () => getDb(config).then(mongoVerifyStore),
     voice: createVoiceRuntime(config, { ttsCache: () => getDb(config).then(mongoTtsCache) }),
     mesh: () => getDb(config).then(mongoMeshStore),
+    // Photo pipeline: the vision verifier, wired ONLY when an XAI key is set.
+    ...(config.xaiApiKey ? { photoVision: makePhotoVision(config) } : {}),
     // Task 8h Tiger READ: wired ONLY when the mirror layer is configured.
     ...(config.tigerDatabaseUrl ? { tigerStatus: pgStatusHistoryReader(config.tigerDatabaseUrl) } : {}),
   };

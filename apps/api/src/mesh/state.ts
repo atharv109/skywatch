@@ -135,6 +135,7 @@ export async function assembleMeshState(
         hasPhoto: photo !== undefined,
         photoKind: photo?.kind ?? null,
         photoUrl: photo ? `/mesh/photo/${p.photoRef}` : null,
+        photoVision: p.photoVision ?? null,
       };
     });
 

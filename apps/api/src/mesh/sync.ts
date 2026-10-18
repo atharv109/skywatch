@@ -24,6 +24,7 @@ import {
   type VerifyState,
 } from "./types.ts";
 import type { DownlinkBundle } from "./types.ts";
+import type { PhotoVerdict } from "./photovision.ts";
 
 /**
  * The /mesh/sync batch processor (Task 8). Per packet, in order:
@@ -192,7 +193,7 @@ async function verifyPacket(store: MeshStore, packet: ParsedPacket, now: number)
   return { verify: "invalid", verifyReason: "no pubkey and device not pinned (send pubkey on the first packet or legacy:true)" };
 }
 
-function packetDoc(packet: ParsedPacket, verify: VerifyResult, score: number | null, reasons: string[], now: number): MeshPacketDoc {
+function packetDoc(packet: ParsedPacket, verify: VerifyResult, score: number | null, reasons: string[], now: number, photoVision?: { verdict: PhotoVerdict["verdict"]; confidence: number; detail: string } | null): MeshPacketDoc {
   // Beacons carry the CANONICAL kind label as their status; everything else keeps
   // the (trimmed) caller status.
   return {
@@ -215,6 +216,7 @@ function packetDoc(packet: ParsedPacket, verify: VerifyResult, score: number | n
     receivedAt: now,
     to: packet.to,
     photoRef: packet.photoRef,
+    ...(photoVision ? { photoVision } : {}),
   };
 }
 
@@ -254,6 +256,11 @@ export async function processSync(
   // Task 10 directions: resolves the verified-open shelter's route (OSRM live /
   // demo prepared pack, per the composed knobs); [] = nothing rode, never blocks.
   directions?: (now: number) => Promise<MeshRouteView[]>,
+  // Photo pipeline: the picture-verifier seam for a packet's photoRef (routes.ts
+  // builds it from deps.photoVision + the photo store; optional — hermetic
+  // harnesses without the dep keep the exact previous behavior). Returns null only
+  // on seam-internal failure; the caller never throws into the pipeline either.
+  photoVision?: (packet: ParsedPacket) => Promise<PhotoVerdict | null>,
 ): Promise<SyncOutcome> {
   if (typeof body?.deviceId !== "string" || body.deviceId.length === 0 || body.deviceId.length > 128) {
     throw new SyncError("deviceId must be a string of 1..128 chars");
@@ -345,14 +352,33 @@ export async function processSync(
       { type: "Point", coordinates: [packet.lon, packet.lat] },
       now,
     );
+    // Photo pipeline: a packet whose photoRef resolves to UPLOADED bytes is
+    // classified now (the verdict composes into the ONE sync-time score). A
+    // seam never throws here; null = no verdict (score keeps the flag-only path).
+    let photoVerdict: PhotoVerdict | null = null;
+    if (photoVision && packet.photoRef !== null) {
+      photoVerdict = (await photoVision(packet).catch(() => null)) ?? null;
+    }
     const scored = scoreUplink({
       hazards,
       corroborators: corroboratorsFor(packet),
       photo: packet.photo,
+      photoVerdict,
       unsigned: verify.verify === "unsigned",
     });
     scoredCount += 1;
-    docs.push({ packet, doc: packetDoc(packet, verify, scored.score, scored.reasons, now) });
+    docs.push({
+      packet,
+      doc: packetDoc(
+        packet,
+        verify,
+        scored.score,
+        scored.reasons,
+        now,
+        // Only a verdict that actually ARRIVED is recorded doc-side (null = not run).
+        photoVerdict ? { verdict: photoVerdict.verdict, confidence: photoVerdict.confidence, detail: photoVerdict.detail } : null,
+      ),
+    });
   }
 
   let inserted = 0;

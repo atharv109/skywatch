@@ -1,10 +1,11 @@
 import { buildUserBrief, EMERGENCY_LINE } from "../brief/build.ts";
 import { fallbackRender, TEMPLATES } from "../brief/fallback.ts";
+import { confidenceFor } from "../confidence.ts";
 import { haversineKm } from "../match/geo.ts";
 import type { MatchStore } from "../match/store.ts";
 import type { Lang } from "../types/brief.ts";
 import type { MeshRouteView } from "./types.ts";
-import { hashPrefix, messageView } from "./state.ts";
+import { hashPrefix, messageView, MESH_DECAY_KIND } from "./state.ts";
 import type { MeshStore } from "./store.ts";
 import type { DownlinkBundle, SatelliteSection } from "./types.ts";
 
@@ -29,6 +30,9 @@ import type { DownlinkBundle, SatelliteSection } from "./types.ts";
 export const MESH_MSG_BUNDLE_RADIUS_KM = 5;
 /** Task 8b: bundle message cap (newest first). */
 export const MESH_MSG_BUNDLE_CAP = 20;
+
+/** Photo pipeline: the bundle's brief-panel news rows (scored reports WITH resolved photos), newest first. */
+export const MESH_PHOTO_REPORT_CAP = 5;
 
 /**
  * Per-language ack skeletons — MIRROR NOTE (911-string pattern, same convention the
@@ -108,6 +112,33 @@ export async function buildDownlink(
     .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
     .slice(0, MESH_MSG_BUNDLE_CAP)
     .map((p) => messageView(p, byRef));
+  // Photo pipeline: the sync's brief-panel news — scored reports whose photo
+  // pointers RESOLVE, each with its (read-time-decayed) score, the reason trail
+  // (base/zone/photo-verdict/corroborators) and the AI verdict row verbatim.
+  // Capped; included ONLY when any exist (never half-arrives).
+  const photoReports = packets
+    .filter((p) => p.photoRef !== null && p.score !== null && byRef.has(p.photoRef))
+    .sort((a, b) => b.receivedAt - a.receivedAt || a.id.localeCompare(b.id))
+    .slice(0, MESH_PHOTO_REPORT_CAP)
+    .map((p) => {
+      const photo = byRef.get(p.photoRef!);
+      return {
+        id: p.id,
+        status: p.status,
+        lat: p.lat,
+        lon: p.lon,
+        ts: p.ts,
+        score:
+          p.score === null
+            ? 0
+            : Math.round(p.score * confidenceFor(MESH_DECAY_KIND, p.scoredAt, now) * 100) / 100,
+        reasons: p.reasons,
+        photoVision: p.photoVision ?? null,
+        photoKind: photo?.kind ?? null,
+        photoUrl: `/mesh/photo/${p.photoRef}`,
+      };
+    });
+  const photoSection = photoReports.length > 0 ? { photoReports } : undefined;
   // Task 10: the fact-based route (no validator) — omitted on failure/absence.
   let routes: MeshRouteView[] | undefined;
   if (directions) {
@@ -125,6 +156,7 @@ export async function buildDownlink(
     blockedRoads: brief.blockedRoads,
     acks,
     messages,
+    ...(photoSection ?? {}),
     // Optional keys: a section/fact is present ONLY when it was genuinely fetched;
     // failure = absent (never half-arrive).
     ...(satellite ? { satellite } : {}),

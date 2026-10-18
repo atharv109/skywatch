@@ -19,6 +19,8 @@ export interface Config {
   tigerDatabaseUrl: string | null;
   /** Task 8f: Grok Voice TTS (xAI) for the post-call summary audio — unset = text-only path, zero TTS calls. */
   xaiApiKey: string | null;
+  /** Photo pipeline: the xAI vision model id for mesh photo verification (default XAI_VISION_MODEL; override via SKYWATCH_XAI_VISION_MODEL when the docs' model names change). */
+  xaiVisionModel: string | null;
   /** Task 8g: phone-native demo onboarding (server-signed /demo/* routes) — OFF outside the demo (the lead sets it for the demo). */
   demoSignup: boolean;
   /** Task 9: allow LIVE Gemini inside REPLAY=1 (MLH Gemini track + live beat-6 Q&A over fixture data) — off default: today's fail-safe posture unchanged. */
@@ -68,6 +70,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     /** Task 8e: allow LIVE satellite fetches during gateway sync (default 0 = tests hermetic + offline-deterministic; REPLAY does not gate this). */
     liveSync: env["SKYWATCH_LIVE_SYNC"] === "1",
     xaiApiKey: secret(env, "XAI_API_KEY"),
+    xaiVisionModel: secret(env, "SKYWATCH_XAI_VISION_MODEL"),
     demoSignup: env["DEMO_SIGNUP"] === "1",
     geminiLiveInReplay: env["GEMINI_LIVE_IN_REPLAY"] === "1",
     publicBaseUrl: secret(env, "PUBLIC_BASE_URL") ?? `http://localhost:${env["PORT"] ?? "3000"}`,

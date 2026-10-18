@@ -6,14 +6,36 @@ import { fetchRoute, osrmDistanceKm, preparedRoute, profileFor } from "../routes
 import { assembleMeshState, hashPrefix } from "./state.ts";
 import { makeSkywatchChat } from "./skywatch.ts";
 import { SyncError, processSync } from "./sync.ts";
-import {
-  MESH_PHOTO_BYTES_CAP,
-  MESH_PHOTO_LABELS,
-  SKYWATCH_CORE_ID,
-  type MeshPhotoDoc,
-  type MeshPhotoLabel,
-  type MeshRouteView,
-} from "./types.ts";
+import { PHOTO_PENDING_REASON } from "./photovision.ts";
+import type { PhotoVerdict, PhotoVision } from "./photovision.ts";
+import type { MeshStore } from "./store.ts";
+import { MESH_PHOTO_BYTES_CAP, MESH_PHOTO_LABELS, SKYWATCH_CORE_ID, type MeshPhotoDoc, type MeshPhotoLabel, type MeshRouteView } from "./types.ts";
+import type { ParsedPacket } from "./types.ts";
+
+/**
+ * Photo pipeline seam for SYNC-TIME scoring: the packet's photoRef is resolved
+ * against the photo store — bytes already uploaded (a gateway re-shot after an
+ * earlier sync) are classified NOW (the verdict composes into the ONE sync-time
+ * score); bytes not yet uploaded (the usual order: packets first, photos batched
+ * after) return the recorded "photo bytes not uploaded yet" verdict. No dep =
+ * undefined (the exact previous behavior: photoRef packets scored without a reason).
+ */
+export function makeSyncPhotoVision(deps: AppDeps, store: MeshStore): ((packet: ParsedPacket) => Promise<PhotoVerdict | null>) | undefined {
+  if (!deps.photoVision) return undefined;
+  return async (packet: ParsedPacket) => {
+    const photo = packet.photoRef !== null ? await store.getPhoto(packet.photoRef) : null;
+    if (!photo) {
+      return { verdict: "unverified", boost: 0, reason: PHOTO_PENDING_REASON, detail: "declared photoRef has no uploaded bytes yet", confidence: 0 };
+    }
+    return deps.photoVision!({
+      photoRef: packet.photoRef!,
+      label: photo.kind,
+      status: packet.status,
+      contentType: photo.contentType,
+      data: photo.data,
+    });
+  };
+}
 
 /**
  * Task 10 directions seam: live OSRM ONLY when SKYWATCH_LIVE_SYNC=1 (the same
@@ -126,6 +148,9 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
         makeSkywatchChat(config, deps),
         makeSatelliteFetcher(config, deps),
         makeDirectionsFetcher(config, deps, () => ({ lat: body.lat, lon: body.lon })),
+        // Photo pipeline: sync-time classification for photoRefs whose bytes are
+        // already uploaded (packets-first/photos-after order is covered at upload).
+        makeSyncPhotoVision(deps, store),
       );
       return c.json(result);
     } catch (err) {
@@ -223,7 +248,39 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
       };
       // Upsert: idempotent gateway retries overwrite byte-for-byte.
       await store.putPhoto(doc);
-      return c.json({ ok: true, photoRef, bytes: doc.bytes, contentType: doc.contentType, kind });
+      // Photo pipeline: classify the just-uploaded bytes against the packet's
+      // claimed label/status and apply the verdict (upload-time boost — the
+      // packets-first/photos-after order means the sync already scored without
+      // the bytes). ANY failure leaves the upload itself ok:true and unblocked;
+      // the verdict's reason rides the packet's score reasons either way.
+      let vision: PhotoVerdict | null = null;
+      if (deps.photoVision) {
+        try {
+          const claimed = await store.findPacketByPhotoRef(photoRef);
+          const pv = await deps.photoVision({
+            photoRef,
+            label: kind,
+            status: claimed ? claimed.status : "",
+            contentType: doc.contentType,
+            data: doc.data,
+          });
+          if (pv) {
+            vision = pv;
+            await store.applyPhotoVerdict(photoRef, pv);
+          }
+        } catch (err) {
+          // The verifier must never fail the upload (pipeline posture: never blocks).
+          console.error("mesh/photo vision failed (upload unaffected):", err instanceof Error ? err.message : err);
+        }
+      }
+      return c.json({
+        ok: true,
+        photoRef,
+        bytes: doc.bytes,
+        contentType: doc.contentType,
+        kind,
+        ...(vision ? { vision: { verdict: vision.verdict, boost: vision.boost, reason: vision.reason } } : {}),
+      });
     } catch (err) {
       console.error("mesh/photo upload failed:", err instanceof Error ? err.message : err);
       return c.json({ error: "photo upload failed" }, 503);

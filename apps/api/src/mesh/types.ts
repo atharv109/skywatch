@@ -196,12 +196,14 @@ export interface MeshPacketDoc {
   deviceId: string;
   verify: VerifyState;
   verifyReason: string | null;
-  /** Sync-time score, stored once and never recomputed (null = unscored: verify failure or relay type). */
+  /** Sync-time score, stored once and never recomputed (null = unscored: verify failure or relay type). A CONFIRMED photo-verdict adds the one-time +0.2 via applyPhotoVerdict — still never recomputed. */
   score: number | null;
   /** Backend clock when scored — read-time decay composes from here. */
   scoredAt: number;
   reasons: string[];
   receivedAt: number;
+  /** Photo pipeline: the vision verdict applied to this packet's photo (absent = no verdict yet; the mesh photo scoring recorded its trace in `reasons`). */
+  photoVision?: { verdict: "confirmed" | "rejected" | "unverified"; confidence: number; detail: string } | null;
   /** Task 8b (msg only): destination deviceId hash, null = broadcast. */
   to: string | null;
   /** Task 8e: photo pointer (null = none). */
@@ -290,6 +292,8 @@ export interface MeshState {
     hasPhoto: boolean;
     photoKind: MeshPhotoLabel | null;
     photoUrl: string | null;
+    /** Photo pipeline: the applied vision verdict (absent = none yet) — the dashboard renders the "photo verified/not verified" chip from it. */
+    photoVision?: { verdict: "confirmed" | "rejected" | "unverified"; confidence: number; detail: string } | null;
   }>;
   /** Anonymized coverage dots: deviceId hashed to a stable prefix + rounded location. */
   coverage: Array<{ id: string; lat: number; lon: number }>;
@@ -320,6 +324,21 @@ export interface DownlinkBundle {
   acks: Array<{ beaconClusterId: string; message: string }>;
   /** Task 8b: newest 20 mesh messages addressed to the gateway's hash or broadcast within its area — user text passed through verbatim (the template rule binds only server-COMPOSED strings). */
   messages: MeshMessageView[];
+  /** Photo pipeline: scored mesh reports whose photo pointers RESOLVE to uploaded bytes — the bundle's brief-panel news rows (score + reasons + AI verdict), capped 5, present ONLY when any exist. */
+  photoReports?: Array<{
+    id: string;
+    status: string;
+    lat: number;
+    lon: number;
+    ts: number;
+    /** Stored score composed with the same 30-min read-time decay /mesh/state shows. */
+    score: number;
+    reasons: string[];
+    /** The applied vision verdict (null = scored on location/neighbors alone). */
+    photoVision: { verdict: string; confidence: number; detail: string } | null;
+    photoKind: MeshPhotoLabel | null;
+    photoUrl: string;
+  }>;
   /** Task 8e: the live satellite snapshot for the gateway's area — present ONLY when SKYWATCH_LIVE_SYNC=1 AND every source fetch succeeded (never half-arrive). */
   satellite?: SatelliteSection;
   /** Task 10: walking/driving directions to the bundle's verified-open shelter — present ONLY when a route was fetched (or the demo-prepared pack served); failure ⇒ key omitted (the app falls back to its glow line). */
