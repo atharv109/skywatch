@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Config } from "../config.ts";
 import type { AppDeps } from "../deps.ts";
 import { assembleMeshState } from "./state.ts";
+import { makeSkywatchChat } from "./skywatch.ts";
 import { SyncError, processSync } from "./sync.ts";
 
 /**
@@ -40,7 +41,9 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
     try {
       const store = await meshStore(deps);
       const match = await deps.match();
-      const result = await processSync(store, match, body, Date.now());
+      // Task 8d Ask Skywatch: the chat seam rides the app's own deps (Task 6 chat
+      // loop over the brief tooling + the validator); no mesh-specific config.
+      const result = await processSync(store, match, body, Date.now(), makeSkywatchChat(config, deps));
       return c.json(result);
     } catch (err) {
       if (err instanceof SyncError) {

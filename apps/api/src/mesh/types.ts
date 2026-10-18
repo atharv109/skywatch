@@ -16,6 +16,17 @@ export type MeshPacketType = (typeof MESH_PACKET_TYPES)[number];
 /** User chat text over the mesh (Task 8b): the free-text cap on a msg packet's `status`. */
 export const MESH_MSG_STATUS_MAX = 280;
 
+/**
+ * Task 8d "Ask Skywatch": a msg packet addressed (case-insensitively) to
+ * SKYWATCH_ROUTE is a QUESTION routed to the Skywatch chat loop at sync time; the
+ * answer is stored as a NEW msg packet from device SKYWATCH_CORE_ID, signed by
+ * nobody — it carries verify:"core" (the trusted-core exemption: the server IS the
+ * author, so there is nothing to verify; never clustered, never scored, always
+ * delivered). Gateways may never CLAIM this deviceId (rejected at the door).
+ */
+export const SKYWATCH_ROUTE = "SKYWATCH";
+export const SKYWATCH_CORE_ID = "SKYWATCH-CORE";
+
 /** Canonical normalized rescue kinds (the packet's raw `status` is normalized at the door). */
 export const RESCUE_KINDS = ["Trapped", "Injured", "Need Rescue"] as const;
 export type RescueKind = (typeof RESCUE_KINDS)[number];
@@ -70,7 +81,33 @@ export interface ParsedPacket {
   to: string | null;
 }
 
-export type VerifyState = "ok" | "unsigned" | "mismatch" | "invalid";
+/**
+ * Task 8d Ask Skywatch: one question packet handed to the chat loop, and the async
+ * seam sync.ts calls for an answer. Context resolves at the ASKER's coordinates
+ * (the question carries the stranded user's location), via a point-based brief —
+ * the same brief builder / tool route flow use.
+ */
+export interface SkywatchQuestion {
+  /** The asker's packet id (correlation only). */
+  id: string;
+  /** The question text, verbatim. */
+  text: string;
+  /** hashPrefix of the asker's deviceId — the reply is addressed direct to this. */
+  askerHash: string;
+  /** The asker's own coordinates (Point [lon, lat]). */
+  loc: Point;
+}
+
+/** Returns the answer text (validator-safe, ≤ the packet cap after slice at sync). */
+export type SkywatchChat = (question: SkywatchQuestion, now: number) => Promise<string>;
+
+/**
+ * Verify states: "ok" = sig verified, "unsigned" = legacy device (no WebCrypto),
+ * "core" = the server's own trusted-core packet (Task 8d Ask Skywatch reply —
+ * server-signed by construction, nothing to verify; never clustered, always
+ * delivered), "mismatch"/"invalid" = sig failure (stored, never dropped silently).
+ */
+export type VerifyState = "ok" | "unsigned" | "core" | "mismatch" | "invalid";
 
 /** One stored uplink packet (mesh_packets; unique index on id — the dedup key). */
 export interface MeshPacketDoc {

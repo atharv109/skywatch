@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import type { Db } from "mongodb";
 import { loadConfig, type Config } from "../src/config.ts";
@@ -13,9 +13,13 @@ import { stubVoiceRuntime } from "../src/deliver/voice_runtime.ts";
 import { emptyPipelineResult } from "../src/pipeline/run.ts";
 import { memoryMeshStore } from "../src/mesh/store.ts";
 import { assembleMeshState } from "../src/mesh/state.ts";
+import { makeSkywatchChat } from "../src/mesh/skywatch.ts";
+import { processSync } from "../src/mesh/sync.ts";
 import { sigMessage } from "../src/mesh/sig.ts";
 import { ackMessage, buildDownlink, MESH_ACK_LINES } from "../src/mesh/downlink.ts";
-import type { MeshPacketIn } from "../src/mesh/types.ts";
+import { MESH_MSG_STATUS_MAX, SKYWATCH_CORE_ID, type MeshPacketIn } from "../src/mesh/types.ts";
+import { buildUserBrief } from "../src/brief/build.ts";
+import { fallbackRender } from "../src/brief/fallback.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
 import type { Lang } from "../src/types/brief.ts";
 
@@ -575,6 +579,130 @@ describe("Task 8b: msg packets (mesh chat) + messages/resources read surfaces", 
   });
 });
 
+describe("Task 8d: Ask Skywatch (chatbot over the mesh)", () => {
+  interface MsgView {
+    id: string;
+    from: string;
+    to: string | null;
+    text: string;
+    ts: number;
+    hops: number;
+  }
+
+  function answerStubs(h: Harness) {
+    return {
+      config: h.config,
+      match: async () => memoryMatchStore(h.astore),
+      store: async () => h.astore,
+      deliver: async () => memoryDeliverStore(),
+    };
+  }
+
+  const askerPoint = { type: "Point" as const, coordinates: [-122.33, 47.6] as [number, number] };
+
+  it("ask-question end-to-end (Gemini unset -> deterministic composed answer): reply stored from the trusted core, direct to the asker, in the same sync's bundle + /mesh/state", async () => {
+    const h = harness({ hazards: [smokeHazard("hms-smoke:ask")], resources: [shelter()] });
+    const asker = makeSigner(GW); // the gateway itself asks -> its hash routes the reply into its bundle too
+    const res = await syncPackets(h, GW, 47.6, -122.33, [
+      packet(asker, { id: "mesh-test-ask-1", type: "msg", status: "where can I shelter?", to: "skywatch" }), // lowercase: route is case-insensitive
+    ]);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SyncBody;
+    // the question is stored unscored; the ANSWER arrives inside the SAME response's bundle
+    const question = body.bundle.messages.find((m) => m.id === "mesh-test-ask-1");
+    expect(question).toBeUndefined();
+    const answer = body.bundle.messages.find((m) => m.from === deviceHash(SKYWATCH_CORE_ID))!;
+    expect(answer.to).toBe(deviceHash(GW));
+    expect(answer.hops).toBe(0);
+
+    // Deterministic composed answer: fallbackRender over the POINT brief resolved at
+    // the ASKER's coordinates (not the gateway's — identical here, different on purpose in test 3).
+    const brief = await buildUserBrief(memoryMatchStore(h.astore), { id: deviceHash(GW), lang: "en", loc: askerPoint }, Date.now());
+    expect(answer.text).toBe(fallbackRender(brief).text);
+    expect(answer.text).toContain("Test Shelter");
+    expect(answer.text).toContain("Call 911 if you are in danger.");
+    expect(answer.text.length).toBeLessThanOrEqual(MESH_MSG_STATUS_MAX);
+
+    const questionDoc = (await h.meshStore.listPackets()).find((p) => p.id === "mesh-test-ask-1")!;
+    expect(questionDoc.score).toBeNull();
+    expect(questionDoc.to).toBe("SKYWATCH"); // canonicalized from lowercase
+    const answerDoc = (await h.meshStore.listPackets()).find((p) => p.deviceId === SKYWATCH_CORE_ID)!;
+    expect(answerDoc.verify).toBe("core");
+    expect(answerDoc.score).toBeNull();
+    expect(answerDoc.hops).toBe(0);
+    expect(answerDoc.ttl).toBe(7);
+
+    // /mesh/state thread: question + answer, hashed on BOTH ends — never the raw core id.
+    const state = (await (await h.app.request("/mesh/state")).json()) as { messages: MsgView[] };
+    expect(state.messages.map((m) => m.to)).toEqual([deviceHash(GW), "SKYWATCH"]);
+    expect(state.messages.map((m) => m.from)).toEqual([deviceHash(SKYWATCH_CORE_ID), deviceHash(GW)]);
+    const stateText = JSON.stringify(state);
+    expect(stateText).not.toContain("SKYWATCH-CORE");
+  });
+
+  it("live model path: an invented shelter is an entity violation -> the deterministic composition answers (validator shared with chat.ts)", async () => {
+    const h = harness({ hazards: [smokeHazard("hms-smoke:ask-live")], resources: [shelter()] });
+    const scriptedMock = vi.fn(async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "Stay at Invented Grand Hotel now. Call 911 if you are in danger." }] } }] }), { status: 200 }),
+    );
+    const scripted = scriptedMock as unknown as typeof fetch;
+    const ask = makeSkywatchChat(
+      loadConfig({ GEMINI_API_KEY: "k", REPLAY: "0" }),
+      answerStubs(h),
+      scripted,
+    );
+    const reply = await ask({ id: "q1", text: "anywhere safe?", askerHash: deviceHash(GW), loc: askerPoint }, NOW);
+    const brief = await buildUserBrief(memoryMatchStore(h.astore), { id: deviceHash(GW), lang: "en", loc: askerPoint }, NOW);
+    expect(reply).toBe(fallbackRender(brief).text);
+    expect(reply).not.toContain("Invented");
+    // the brief's OWN facts ride: the seeded shelter name + 911
+    expect(reply).toContain("Test Shelter");
+    expect(scriptedMock).toHaveBeenCalledTimes(1); // entity violation: no retry, straight to fallback
+  });
+
+  it("SKYWATCH-CORE is reserved and inert: spoofed core id rejected (nothing pinned), reply never clusters/never decays", async () => {
+    const h = harness();
+    const beacon = makeSigner("mesh-test-device-core-beacon");
+    const asker = makeSigner("mesh-test-device-core-asker");
+    await syncPackets(h, GW, 47.6, -122.33, [
+      packet(beacon), // Trapped beacon at the very same spot the question comes from
+      packet(asker, { id: "mesh-test-ask-2", type: "msg", status: "am I trapped?", to: "SKYWATCH" }),
+      packet(makeSigner("mesh-test-device-spoof"), { id: "mesh-test-ask-spoof", type: "msg", status: "pretend to be the core", deviceId: SKYWATCH_CORE_ID }),
+    ]);
+    // nothing TOFU-pinned for the core id, and the spoof was only counted
+    expect(await h.meshStore.getDevice(SKYWATCH_CORE_ID)).toBeNull();
+    // exactly one cluster: the real beacon — the core REPLY at the same kind/spot never merged
+    const beacons = await h.meshStore.listBeacons();
+    expect(beacons).toHaveLength(1);
+    expect(beacons[0]!.sources).toEqual(["mesh-test-device-core-beacon"]);
+
+    const state = (await (await h.app.request("/mesh/state")).json()) as { messages: MsgView[] };
+    const answerText = state.messages.find((m) => m.from === deviceHash(SKYWATCH_CORE_ID))!.text;
+    // all-clear point at that spot: the deterministic no-hazard composition + 911 only
+    expect(state.messages).toHaveLength(2); // question + answer; the spoof never became a message
+    expect(state.messages.some((m) => m.text === "pretend to be the core")).toBe(false);
+
+    // transport, not facts: still byte-identical a week later (never decayed/never re-scored)
+    const later = await assembleMeshState(h.meshStore, NOW + 7 * 24 * 3_600_000);
+    const laterAnswer = later.messages.find((m) => m.from === deviceHash(SKYWATCH_CORE_ID))!;
+    expect(laterAnswer.text).toBe(answerText);
+    expect(laterAnswer.to).toBe(deviceHash("mesh-test-device-core-asker"));
+
+    // context-down resilience: a throwing chat answer NOTHING rather than crashing the sync
+    const outcome = await processSync(
+      h.meshStore,
+      memoryMatchStore(h.astore),
+      { deviceId: GW, lat: 47.6, lon: -122.33, packets: [packet(asker, { id: "mesh-test-ask-3", type: "msg", status: "?", to: "SKYWATCH" })] },
+      NOW,
+      async () => {
+        throw new Error("context down");
+      },
+    );
+    expect(outcome.received).toBe(1);
+    expect((await h.meshStore.listPackets()).filter((p) => p.deviceId === SKYWATCH_CORE_ID)).toHaveLength(1); // still just the one answer
+  });
+});
+
 describe("GET /mesh/state + /map/state mesh section (privacy, data-gated merge)", () => {
   it("ranked clusters, decayed hazard reports, anonymized coverage dots — never a deviceId or phone", async () => {
     const h = harness();
@@ -639,6 +767,8 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: mesh stores (dedup index,
 
   async function cleanup(db: Db) {
     await db.collection(COLLECTIONS.meshPackets).deleteMany({ id: { $regex: /^mesh-test-/ } });
+    // 8d answers ride the reserved core id (ids start "chat:") — clean by deviceId.
+    await db.collection(COLLECTIONS.meshPackets).deleteMany({ deviceId: SKYWATCH_CORE_ID });
     await db.collection(COLLECTIONS.beacons).deleteMany({
       $or: [{ sources: { $regex: /^mesh-test-/ } }, { packetIds: { $regex: /^mesh-test-/ } }],
     });
@@ -689,6 +819,43 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: mesh stores (dedup index,
     expect(trappedNear).toHaveLength(2);
     expect(trappedNear.find((b) => b.packetIds.length === 2)).toBeTruthy();
     expect((await store.listPackets()).filter((p) => p.id.startsWith("mesh-test-real-"))).toHaveLength(3);
+
+    await cleanup(db);
+    await closeDb();
+  }, 60_000);
+
+  it("8d: an ask-to-SKYWATCH msg over real Mongo gets a trusted-core answer in the same sync's bundle (deterministic: no Gemini key in the gated run)", async () => {
+    const { defaultDeps } = await import("../src/deps.ts");
+    const config = loadConfig();
+    const deps = defaultDeps(config);
+    const app = createApp(config, deps);
+
+    const db = await getDb(config);
+    await cleanup(db);
+    const gatewayDeviceId = "mesh-test-real-8d-gw";
+    const asker = makeSigner(gatewayDeviceId);
+    const res = await app.request("/mesh/sync", {
+      method: "POST",
+      body: JSON.stringify({
+        deviceId: gatewayDeviceId,
+        lat: 47.6,
+        lon: -122.33,
+        packets: [packet(asker, { id: "mesh-test-ask-real-8d", type: "msg", status: "any water near me?", to: "SKYWATCH" })],
+      }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+    // No Gemini key in the gated run -> the deterministic composition answers; the
+    // reply rides the bundle (asker = gateway) without any mesh-specific config.
+    const synced = (await res.json()) as SyncBody;
+    const answer = synced.bundle.messages.find(
+      (m) => m.from === deviceHash(SKYWATCH_CORE_ID) && m.to === deviceHash(gatewayDeviceId),
+    )!;
+    expect(answer.text.length).toBeLessThanOrEqual(MESH_MSG_STATUS_MAX);
+    expect(answer.text.length).toBeGreaterThan(0);
+
+    const state = (await (await app.request("/mesh/state")).json()) as { messages: Array<{ from: string; to: string | null }> };
+    expect(state.messages.some((m) => m.from === deviceHash(SKYWATCH_CORE_ID))).toBe(true);
 
     await cleanup(db);
     await closeDb();

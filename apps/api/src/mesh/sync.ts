@@ -3,6 +3,7 @@ import { haversineKm } from "../match/geo.ts";
 import type { MatchStore } from "../match/store.ts";
 import type { Point } from "../types/docs.ts";
 import { buildDownlink } from "./downlink.ts";
+import { hashPrefix } from "./state.ts";
 import { normalizeRescueKind } from "./normalize.ts";
 import { scoreUplink } from "./score.ts";
 import { sigMessage, verifySig } from "./sig.ts";
@@ -10,11 +11,14 @@ import type { MeshStore } from "./store.ts";
 import {
   MESH_MSG_STATUS_MAX,
   RESCUE_PRIORITY,
+  SKYWATCH_CORE_ID,
+  SKYWATCH_ROUTE,
   type MeshBeaconDoc,
   type MeshPacketDoc,
   type MeshPacketIn,
   type ParsedPacket,
   type RescueKind,
+  type SkywatchChat,
   type VerifyState,
 } from "./types.ts";
 import type { DownlinkBundle } from "./types.ts";
@@ -34,6 +38,9 @@ import type { DownlinkBundle } from "./types.ts";
  * Task 8b (mesh chat): `msg` packets ride steps 1-3 + dedup exactly like the other
  * types and are scored by nothing, clustered into nothing, and decayed by nothing —
  * they are transport, not facts (state.ts/downlink.ts expose them as `messages`).
+ * Task 8d (Ask Skywatch): a msg addressed `to: "SKYWATCH"` is routed to the Task 6
+ * chat loop and answered as a trusted-core (verify:"core") msg packet stored before
+ * the bundle is built, so the same sync's response already carries the answer.
  */
 
 export const MAX_BATCH = 200;
@@ -81,6 +88,11 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
   if (typeof raw.deviceId !== "string" || raw.deviceId.length === 0 || raw.deviceId.length > 128) {
     return fail("deviceId must be a string of 1..128 chars");
   }
+  if (raw.deviceId === SKYWATCH_CORE_ID) {
+    // Task 8d: the trusted-core id is reserved — a gateway claiming it would TOFU-pin
+    // itself INTO the trusted identity and could spoof answers.
+    return fail("deviceId is reserved (SKYWATCH-CORE answers as the trusted core)");
+  }
   if (raw.hops !== undefined && (!isFiniteNum(raw.hops) || raw.hops < 0)) return fail("hops must be a number >= 0");
   if (raw.ttl !== undefined && (!isFiniteNum(raw.ttl) || raw.ttl <= 0)) return fail("ttl must be a number > 0");
   let status: string;
@@ -100,7 +112,8 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
       if (typeof raw.to !== "string" || raw.to.length === 0 || raw.to.length > 128) {
         return fail("msg to must be null (broadcast) or a deviceId hash string of 1..128 chars");
       }
-      to = raw.to;
+      // Task 8d: "SKYWATCH" (case-insensitive) is canonicalized — the question route.
+      to = raw.to.toUpperCase() === SKYWATCH_ROUTE ? SKYWATCH_ROUTE : raw.to;
     }
   } else {
     status = typeof raw.status === "string" ? raw.status.slice(0, 200) : "";
@@ -215,6 +228,11 @@ export async function processSync(
   match: MatchStore,
   body: SyncBody,
   now: number,
+  // Task 8d Ask Skywatch: optional (tests that only exercise the packet path
+  // pass nothing). When set, every to:"SKYWATCH" question is answered and the
+  // trusted-core reply is stored BEFORE the downlink build — the same sync's
+  // bundle already carries the answer.
+  askSkywatch?: SkywatchChat,
 ): Promise<SyncOutcome> {
   if (typeof body?.deviceId !== "string" || body.deviceId.length === 0 || body.deviceId.length > 128) {
     throw new SyncError("deviceId must be a string of 1..128 chars");
@@ -353,6 +371,53 @@ export async function processSync(
         await store.insertBeacon(created);
       }
     }
+  }
+
+  // Task 8d Ask Skywatch: route every stored question packet (msg to the
+  // canonical SKYWATCH route, any verify state — transport posture: the question
+  // is user text regardless of sig state) through the Task 6 chat loop and store
+  // the trusted-core reply as a new msg packet, direct to the asker's hash,
+  // anchored at the ASKER's own coordinates. A context-build failure answers
+  // NOTHING rather than something wrong (the asker re-asks); the answer text is
+  // validator-safe by construction and sliced to the packet cap.
+  for (const { packet } of docs) {
+    if (!askSkywatch || packet.type !== "msg" || packet.to !== SKYWATCH_ROUTE) continue;
+    const askerHash = hashPrefix(packet.deviceId);
+    const question = {
+      id: packet.id,
+      text: packet.status,
+      askerHash,
+      loc: { type: "Point", coordinates: [packet.lon, packet.lat] } as Point,
+    };
+    let reply: string;
+    try {
+      reply = await askSkywatch(question, now);
+    } catch (err) {
+      console.error("ask-skywatch failed:", err instanceof Error ? err.message : err);
+      continue;
+    }
+    if (reply.trim().length === 0) continue;
+    const doc: MeshPacketDoc = {
+      id: `chat:${randomUUID()}`,
+      type: "msg",
+      rescueKind: null,
+      status: reply.slice(0, MESH_MSG_STATUS_MAX),
+      lat: packet.lat,
+      lon: packet.lon,
+      ts: now,
+      hops: 0,
+      ttl: 7,
+      photo: false,
+      deviceId: SKYWATCH_CORE_ID,
+      verify: "core",
+      verifyReason: null,
+      score: null,
+      scoredAt: now,
+      reasons: ["Ask Skywatch (trusted core) — server-composed via the Task 6 chat loop + validator; never scored, never clustered"],
+      receivedAt: now,
+      to: askerHash,
+    };
+    if (await store.insertPacket(doc)) inserted += 1;
   }
 
   const bundle = await buildDownlink(store, match, { deviceId: body.deviceId, lat: body.lat, lon: body.lon }, now);
