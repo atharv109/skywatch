@@ -20,6 +20,10 @@
  * a manual Profile pick sets netOverride and overrides the detector while set.
  * The same liveness tick drains queued mesh traffic while ONLINE (online + a
  * non-empty queue = you are the gateway), so nothing sits queued above a 5G bar.
+ * Mesh tab has three surfaces (NEIGHBORS broadcasts / DIRECTS 1:1 by peer hash /
+ * SKYWATCH asks); photos ride packets as photoRef+label, downscale client-side,
+ * and upload to /api/mesh/photo after each sync; the downlink bundle's satellite
+ * overlay (plumes/alerts/aqi) persists in LS and renders on the Map offline too.
  * Queued packets sign via WebCrypto Ed25519 exactly
  * per src/mesh/sig.ts: msg = `id|type|ts|lat|lon|deviceId`, base64 raw key+sig,
  * TOFU pinning; deviceId = 10-hex sha256 prefix of the RAW pubkey (per-session
@@ -84,6 +88,8 @@
     thread: "skywatch.thread",    // simulated SMS thread [{from, text, at, kind}]
     flags: "skywatch.flags",      // { configSeen, callShown, walkSeen, pendingSummary }
     loc: "skywatch.loc",          // { lat, lon, label }
+    photos: "skywatch.photos",    // pending photo uploads keyed by photoRef { data, label }
+    sat: "skywatch.satellite",    // last downlink satellite overlay { plumes, alerts, aqi, fetchedAt }
   };
 
   function lsGet(key, fallback) {
@@ -124,6 +130,9 @@
     tab: "home",
     identity: null,            // per-session Ed25519 identity
     ob: null,                  // onboarding flow state
+    meshView: "neighbors",     // 'neighbors' | 'directs' | 'skywatch' — Mesh sub-surface
+    dmPeer: null,              // selected DIRECTS peer device hash
+    composerPhoto: null,       // { ref, data, kb } attached before send; uploads after the sync
     polls: {},                 // timers
     healthTimer: null,
     loading: { brief: true, map: true, mesh: true },
@@ -326,6 +335,7 @@
     wifi: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 9.5a14 14 0 0 1 19 0"/><path d="M5.5 13a10 10 0 0 1 13 0"/><path d="M8.5 16.4a6 6 0 0 1 7 0"/><path d="M12 20h.01"/></svg>',
     meshOn: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="2.2"/><circle cx="4.5" cy="7" r="1.7"/><circle cx="19.5" cy="7" r="1.7"/><circle cx="7" cy="18.5" r="1.7"/><circle cx="17" cy="18.5" r="1.7"/><path d="M11 10.5 6 8.2M13 10.5l5-2.3M10.5 13.8 8 17M13.5 13.8 15.7 17"/></svg>',
     stop: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20"/><path d="M12 8l6-4v16l-6-4M12 12 3 8v8l9-4"/></svg>',
+    cam: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3.2L9 5.5h6L16.8 8H20v11H4z"/><rect x="9" y="11" width="6" height="5" rx="1.2"/><path d="M9.5 11.2 12 8.8l2.5 2.4"/></svg>',
     check: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 4.5 4.5L19.5 6.5"/></svg>',
     send: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 11.8 21 3.5l-8.3 17.5-2.2-7.1-7-2.1z"/></svg>',
     queue: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="13" height="13" rx="3"/><path d="M9 20h8a3 3 0 0 0 3-3V9"/></svg>',
@@ -795,7 +805,9 @@
       kind: kindDef ? kindDef.type : "msg",
       status: kindDef ? (kindDef.type === "beacon" ? kind : status) : "",
       text: kindDef ? "" : String(text || ""),
-      to: opts.to || "",   // "SKYWATCH" = an Ask Skywatch question; reply comes back in a sync bundle
+      to: opts.to || "",   // "" = broadcast · <peer hash> = 1:1 DM · "SKYWATCH" = an Ask Skywatch question
+      photoRef: opts.photoRef || null, // attached photo; bytes upload after the sync (LS pending)
+      label: kindDef ? "" : String(text || ""),
       lat: +myLoc().lat.toFixed(5),
       lon: +myLoc().lon.toFixed(5),
       ts: Date.now(),
@@ -852,7 +864,8 @@
         const sig = await crypto.subtle.sign("Ed25519", identity.priv, new TextEncoder().encode(msg));
         full.sig = bytesToRawB64(new Uint8Array(sig));
       }
-      if (p.to) full.to = p.to; // Ask Skywatch — addressed to the core for a task-8d back-reply
+      if (p.to) full.to = p.to; // DM routing (peer hash or SKYWATCH) — added after signing so the sig contract holds
+      if (p.photoRef) { full.photoRef = p.photoRef; full.label = p.label || ""; }
       packets.push(full);
     }
     if (packets.length === 0) {
@@ -876,6 +889,7 @@
       gwInFlight = false;
     }
     if (result.ok && result.json) {
+      syncGateway._retrying = false;
       const rejected = new Set(result.json.rejectedIds || []);
       state.queue.forEach((p) => {
         if (p.state !== "queued" && p.state !== "fail") return;
@@ -884,15 +898,68 @@
       });
       state.syncState = { at: Date.now(), received: result.json.received, inserted: result.json.inserted, deduped: result.json.deduped, rejected: result.json.rejected, legacy: identity.legacy, deviceId: identity.deviceId };
       state.bundle = result.json.bundle;
+      if (result.json.bundle && result.json.bundle.satellite) {
+        lsSet(LS.sat, result.json.bundle.satellite); // dark phones keep the last overlay after rebroadcast
+      }
       persist.queue();
       renderMeshBadge();
       void safe(fetchMeshState());
+      void safe(flushPhotoUploads()); // batched after the sync — pending photos ride out
       return result.json;
     }
+    if (result.status === 413) {
+      // whole body refused — strip photos and give it one clean retry
+      let photosStripped = false;
+      state.queue.forEach((p) => {
+        if (p.photoRef) {
+          delete p.photoRef;
+          photosStripped = true;
+        }
+      });
+      if (!photosStripped) return null;
+      toast("Photo too large — resending without.", "warn");
+      if (syncGateway._retrying) { syncGateway._retrying = false; return null; }
+      syncGateway._retrying = true;
+      return syncGateway(opts);
+    }
+    syncGateway._retrying = false;
     q.forEach((p) => { p.state = "fail"; });
     persist.queue();
     if (!opts.silent) toast("Gateway sync refused (" + (result.status || "network") + ")", "warn");
     return null;
+  }
+
+  /** POST pending photo uploads (LS) to the real photo store; batched after each sync. */
+  async function flushPhotoUploads() {
+    const pending = lsGet(LS.photos, {});
+    const refs = Object.keys(pending);
+    if (!refs.length || state.mode === "offline") return;
+    const id = state.identity ? state.identity.deviceId : null;
+    if (!id) return;
+    for (const ref of refs) {
+      const ph = pending[ref];
+      let r;
+      try {
+        r = await fetch(apiBase() + "/api/mesh/photo", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId: id, photoRef: ref, data: ph.data, label: ph.label || "" }),
+          signal: timeoutSig(15000),
+        });
+      } catch (_e) { return; } // endpoint absent/network down — retry on the next sync
+      if (r.ok) {
+        delete pending[ref];
+        lsSet(LS.photos, pending);
+      } else if (r.status === 413) {
+        delete pending[ref];
+        lsSet(LS.photos, pending);
+        state.queue.forEach((p) => { if (p.photoRef === ref) delete p.photoRef; });
+        persist.queue();
+        toast("photo too large — resending without it.", "warn");
+      } else {
+        return;
+      }
+      renderMeshBadge();
+    }
   }
 
   /* =========================================================================
@@ -1197,6 +1264,13 @@
 
   function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
+  /** Satellite plume polygons accept the hazard shape, raw rings, or a points array (honest render only). */
+  function plumRings(pl) {
+    if (pl && pl.geometry && pl.geometry.type === "Polygon") return geometryPolys(pl.geometry);
+    if (pl && Array.isArray(pl.coordinates)) return geometryPolys({ type: "Polygon", coordinates: pl.coordinates });
+    return [];
+  }
+
   function drawMap() {
     if (!ctx) return;
     const r = canvas.getBoundingClientRect();
@@ -1213,11 +1287,49 @@
     if (!mapData) {
       drawMapEmpty(w, hgt);
       ctx.restore();
+      renderMapChips();
       return;
     }
     const p = proj();
     const m = mapData.data;
     const t = performance.now();
+
+    // satellite overlay (persisted from the last downlink bundle — dark phones keep it)
+    const sat = lsGet(LS.sat, null);
+    if (sat) {
+      (sat.plumes || []).forEach((pl) => {
+        plumRings(pl).forEach((ring) => {
+          ctx.beginPath();
+          ring.forEach((pair, idx) => {
+            const X = p.x(pair[0]), Y = p.y(pair[1]);
+            if (idx === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+          });
+          ctx.closePath();
+          ctx.fillStyle = "rgba(240,163,78,0.18)";
+          ctx.fill();
+          ctx.strokeStyle = "rgba(240,163,78,0.75)";
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        });
+      });
+      (sat.alerts || []).forEach((al) => {
+        if (al == null || al.lat == null || al.lon == null) return;
+        const X = p.x(al.lon), Y = p.y(al.lat);
+        ctx.beginPath();
+        ctx.arc(X, Y, 9.5, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(240,163,78,0.5)";
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(X, Y, 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(240,163,78,0.95)";
+        ctx.fill();
+        ctx.fillStyle = "#241403";
+        ctx.font = "700 8px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("!", X, Y + 3);
+      });
+    }
 
     // hazards (polygons, filled by severity)
     (m.hazards || []).forEach((hz) => {
@@ -1418,12 +1530,14 @@
     const chips = $("#mapChips");
     const mapData = cached("mapState");
     const mesh = cached("mesh");
+    const sat = lsGet(LS.sat, null);
     const bits = [];
     if (mapData && !mapData.live) bits.push(`<span class="chip chip-mesh">cached · ${esc(fmtAgo(mapData.at))}</span>`);
     if (state.mode === "offline") bits.push(`<span class="chip chip-mesh">mesh sync needed</span>`);
     if (state.mode === "gateway") bits.push(`<span class="chip chip-ok">gateway · carrying the mesh</span>`);
-    if (mesh && mesh.data && mesh.data.counts) bits.push(`<span class="chip chip-n chip-mono">${mesh.data.counts.packets} mesh packets</span>`);
-    if (mapData && mapData.data && (mapData.data.hazards || []).length) bits.push(`<span class="chip chip-warn">${(mapData.data.hazards || []).length} hazards</span>`);
+    if (sat) bits.push(`<span class="chip chip-warn">Satellite data for your area · fetched ${esc(fmtFetchedAt(sat.fetchedAt))}</span>${sat.aqi != null ? `<span class="chip chip-n chip-mono">AQI ${esc(String(sat.aqi))}</span>` : ""}`);
+    if (mesh && mesh.data && mesh.data.counts) bits.push(`<span class="chip chip-n chip-mono">${esc(String(mesh.data.counts.packets))} mesh packets</span>`);
+    if (mapData && mapData.data && (mapData.data.hazards || []).length) bits.push(`<span class="chip chip-warn">${esc(String((mapData.data.hazards || []).length))} hazards</span>`);
     chips.innerHTML = bits.join("");
   }
 
@@ -1521,16 +1635,114 @@
   function DPR() { return Math.max(1, window.devicePixelRatio || 1); }
 
   /* =========================================================================
-   * MESH tab rendering
+   * MESH tab rendering — three surfaces: NEIGHBORS / DIRECTS / SKYWATCH
    * =======================================================================*/
+
+  const CORE_RE = /skywatch/i;
+
+  function fmtFetchedAt(v) {
+    const d = v == null ? null : new Date(typeof v === "number" ? v : String(v));
+    return d && !isNaN(d.getTime()) ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  }
+
+  /** One dedup'd message feed from GET /mesh/state + the downlink bundle. */
+  function meshFeed() {
+    const seen = new Set();
+    const out = [];
+    const add = (from, to, text, ts, photoRef, label) => {
+      from = String(from || "");
+      if (!from || (text == null && !photoRef)) return;
+      const key = from + "|" + (to || "") + "|" + String(text) + "|" + String(ts);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ from, to: to || null, text: String(text || ""), ts: +ts || 0, photoRef: photoRef || null, label: String(label || "") });
+    };
+    const mesh = cached("mesh");
+    ((mesh && mesh.data && mesh.data.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label));
+    ((state.bundle && state.bundle.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label));
+    out.sort((a, b) => a.ts - b.ts);
+    return out;
+  }
+
+  function pendingPhotos() { return lsGet(LS.photos, {}); }
+  function photoSrc(ref) {
+    const pending = pendingPhotos();
+    if (pending[ref] && pending[ref].data) return pending[ref].data; // still local — renders before/without the upload
+    return apiBase() + "/api/mesh/photo/" + encodeURIComponent(ref); // 8e endpoint — 404s hide gracefully
+  }
+  function photoThumb(ref) {
+    return `<img class="msg-thumb" src="${esc(photoSrc(ref))}" alt="photo" loading="lazy" onerror="this.remove()">`;
+  }
+
+  /** Client-side photo cap: ≤1024px, JPEG, and it keeps re-encoding down toward ≤150 KB. */
+  async function makePhotoJPEG(file) {
+    const img = await new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const im = new Image();
+      im.onload = () => { URL.revokeObjectURL(url); resolve(im); };
+      im.onerror = () => { URL.revokeObjectURL(url); reject(new Error("unreadable image")); };
+      im.src = url;
+    });
+    const MAX = 1024, QUOTA = 150 * 1024;
+    let scale = Math.min(1, MAX / Math.max(img.naturalWidth || MAX, img.naturalHeight || MAX));
+    let q = 0.85;
+    let out = "";
+    for (let tries = 0; tries < 7; tries++) {
+      const cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round((img.naturalWidth || MAX) * scale));
+      cv.height = Math.max(1, Math.round((img.naturalHeight || MAX) * scale));
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      out = cv.toDataURL("image/jpeg", q);
+      const bytes = Math.round((out.length - 23) * 3 / 4); // dataURL's b64 payload
+      if (bytes <= QUOTA) break;
+      scale *= 0.85;
+      q = Math.max(0.6, q - 0.05);
+    }
+    return out;
+  }
+
+  async function attachPhoto(file) {
+    const ta = $("#meshText", screens.mesh);
+    const draft = ta ? ta.value : "";
+    try {
+      const data = await makePhotoJPEG(file);
+      state.composerPhoto = {
+        ref: "ph-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
+        data,
+        kb: Math.round(((data.length - 23) * 3 / 4) / 1024),
+      };
+    } catch (_e) {
+      toast("Couldn't read that image — try another.", "warn");
+      return;
+    }
+    haptic(8);
+    renderMesh(); // refresh the preview chip, keep the half-typed draft
+    const ta2 = $("#meshText", screens.mesh);
+    if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); ta2.focus(); }
+  }
+
+  function bubbleHtml(m, meId, withReply) {
+    const core = CORE_RE.test(m.from);
+    const mine = m.from === meId || m.mine === true;
+    const cls = core ? "core" : mine ? "me" : "";
+    const head = core ? `<span class="chip chip-ok core-chip">${ICONS.shieldS} Skywatch</span>` : "";
+    const thumb = m.photoRef ? photoThumb(m.photoRef) : "";
+    const who = core ? "skywatch" : mine ? "you" : String(m.from);
+    const when = m.queued ? '<span class="chip chip-mesh">queued · will send when one of us gets signal</span>' : esc(fmtAgo(m.ts));
+    const reply = withReply && !mine && !core && !m.to ? `<button class="reply-btn" data-reply="${esc(m.from)}">↩ reply</button>` : "";
+    return `<div class="bubble ${cls}">${head}${esc(m.text)}${thumb}<div class="bubble-meta"><span>${esc(who)}</span><span>${when}</span>${reply}</div></div>`;
+  }
 
   function renderMesh() {
     const el = screens.mesh;
     const meId = state.identity ? state.identity.deviceId : null;
-    const mesh = cached("mesh");
-    const myPackets = state.queue;
-    const msgs = mesh && mesh.data ? mesh.data.messages || [] : [];
+    const view = state.meshView || "neighbors";
     const gateway = state.mode === "gateway";
+    const feed = meshFeed();
+    const sat = lsGet(LS.sat, null);
+    const satChip = sat
+      ? `<span class="chip chip-warn">Satellite data for your area · fetched ${esc(fmtFetchedAt(sat.fetchedAt))}</span>${sat.aqi != null ? `<span class="chip chip-n chip-mono">AQI ${esc(String(sat.aqi))}</span>` : ""}`
+      : "";
 
     const gwHtml =
       state.mode === "offline"
@@ -1547,38 +1759,126 @@
             </div>`
           : "";
 
-    const chatHtml = (() => {
-      const mine = myPackets.filter((p) => p.kind === "msg" && p.state !== "sent").reverse().slice(0, 8);
-      const rows = msgs.slice(-14).map((msg) => {
-        const isMe = meId && msg.from === meId;
-        const isCore = !!((msg.to && meId && msg.to === meId) || /skywatch/i.test(String(msg.from || "")));
-        const chip = isCore ? `<span class="chip chip-ok core-chip">${ICONS.shieldS} Skywatch</span>` : "";
-        return `<div class="bubble ${isCore ? "core" : isMe ? "me" : ""}">${chip}${esc(msg.text)}<div class="bubble-meta"><span>${esc(isCore ? "skywatch" : String(msg.from || ""))}</span><span>${esc(fmtAgo(msg.ts))}</span></div></div>`;
-      });
-      const queued = mine.map((p) => `<div class="bubble me">${esc(p.text)}<div class="bubble-meta"><span>you</span><span class="chip chip-mesh">queued · will send when one of us gets signal</span></div></div>`);
-      const all = rows.concat(queued).slice(-18).join("");
-      return all || `<div class="empty">${ICONS.meshOn}<b>No mesh chatter yet</b><p>When you're dark, this is how people nearby share what they see.</p></div>`;
-    })();
+    /* NEIGHBORS — the broadcast thread + my unsent broadcasts */
+    const broadcasts = feed.filter((m) => !m.to && !CORE_RE.test(m.from)).slice(-14);
+    state.queue.filter((p) => p.kind === "msg" && !p.to && (p.state === "queued" || p.state === "fail")).forEach((p) => {
+      broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, mine: true, queued: true });
+    });
+    const neighborsHtml = `
+      <div class="chatwrap" id="meshChat">${broadcasts.map((m) => bubbleHtml(m, meId, true)).join("") || `<div class="empty">${ICONS.meshOn}<b>No mesh chatter yet</b><p>When you're dark, this is how people nearby share what they see.</p></div>`}</div>`;
+
+    /* DIRECTS — per-peer threads (1:1), one tap from any neighbor message */
+    const threads = {};
+    feed.forEach((m) => {
+      if (CORE_RE.test(m.from) || m.to === "SKYWATCH") return;
+      const peer = m.to && m.to === meId ? m.from : m.from === meId ? m.to : null;
+      if (!peer || peer === meId) return;
+      (threads[peer] = threads[peer] || []).push(m);
+    });
+    state.queue.filter((p) => p.kind === "msg" && p.to && p.to !== "SKYWATCH").forEach((p) => {
+      // leave room for the server echo — skip packets /mesh/state already carries
+      if (p.state === "sent" && meId && feed.some((m) => m.from === meId && m.to === p.to && m.text === (p.text || "photo"))) return;
+      (threads[p.to] = threads[p.to] || []).push({ from: meId, to: p.to, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, mine: true, queued: p.state !== "sent" });
+    });
+    Object.values(threads).forEach((arr) => arr.sort((a, b) => a.ts - b.ts));
+    const dmArr = (state.dmPeer && threads[state.dmPeer]) || [];
+    const directsHtml = state.dmPeer
+      ? `<div class="sec-label" style="margin-top:2px"><button class="reply-btn" data-dm-back aria-label="All threads">← threads</button>&nbsp;→ <span class="chip chip-mono chip-mesh">${esc(state.dmPeer)}</span></div>
+          <div class="chatwrap">${dmArr.map((m) => bubbleHtml(m, meId, false)).join("") || '<div class="empty">' + ICONS.sms + '<b>New direct thread</b><p>You and ' + esc(state.dmPeer) + ' — what you send here rides the mesh, relayed by a node with signal.</p></div>'}</div>`
+      : `<div class="chips" style="margin-bottom:10px"><span class="chip chip-mesh">relayed by a node with signal</span></div>
+          ${Object.keys(threads).length
+            ? Object.entries(threads).sort((a, b) => b[1][b[1].length - 1].ts - a[1][a[1].length - 1].ts).map(([peer, arr]) => {
+              const last = arr[arr.length - 1];
+              return `<button class="mode-row" data-peer="${esc(peer)}">
+                <div class="mode-ic ic-off">${ICONS.sms}</div>
+                <div style="flex:1;min-width:0"><b class="chip-mono">${esc(peer)}</b><span class="sub">${esc(last.text.slice(0, 44))}${last.text.length > 44 ? "…" : ""}</span></div>
+                <span class="mono dim">${esc(fmtAgo(last.ts))}</span>
+              </button>`;
+            }).join("")
+            : `<div class="empty">${ICONS.sms}<b>No direct threads yet</b><p>Reply to a neighbor's message in NEIGHBORS — or send the first one once they post.</p></div>`}`;
+
+    /* SKYWATCH — the Ask Skywatch surface, shield-branded and separate */
+    const skyThread = feed
+      .filter((m) => CORE_RE.test(m.from) || m.to === "SKYWATCH")
+      .map((m) => Object.assign({}, m, { mine: m.to === "SKYWATCH" }));
+    state.queue.filter((p) => p.kind === "msg" && p.to === "SKYWATCH").forEach((p) => {
+      if (p.state === "sent" && meId && feed.some((m) => m.from === meId && m.to === "SKYWATCH" && m.text === (p.text || "photo"))) return;
+      skyThread.push({ from: meId, to: "SKYWATCH", text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, mine: true, queued: p.state !== "sent" });
+    });
+    skyThread.sort((a, b) => a.ts - b.ts);
+    const skyHtml = `
+      <div class="gw-banner" style="border-color:rgba(66,206,147,.35);background:var(--ok-dim)">
+        <h3>${ICONS.shieldS} Ask Skywatch</h3>
+        <p>facts from your area brief — no live model.</p>
+        <div class="chips" style="margin-top:10px">${ASKS.map((p) => `<button class="prompt-chip chip chip-n" data-prompt="${esc(p)}">${esc(p)}</button>`).join("")}</div>
+      </div>
+      <div class="chatwrap">${skyThread.map((m) => bubbleHtml(m, meId, false)).join("") || '<div class="empty">' + ICONS.meshOn + '<b>No asks yet</b><p>Pick a suggested question, or type your own.</p></div>'}</div>`;
 
     const queueHtml = (() => {
-      const recent = myPackets.slice(-14).reverse();
+      const recent = state.queue.slice(-14).reverse();
       if (!recent.length) return "";
       return `<div class="sec-label">Your packets<small>signed with this device's key — reload gives you a new identity</small></div>
         ${recent.map(pktRowHtml).join("")}`;
     })();
 
-    const counts = mesh && mesh.data && mesh.data.counts
+    const counts = (cached("mesh") && cached("mesh").data && cached("mesh").data.counts)
       ? `<div class="chips" style="margin-top:12px">
-          <span class="chip chip-n chip-mono">${mesh.data.counts.packets} packets</span>
-          <span class="chip chip-n chip-mono">${mesh.data.counts.beacons} beacons</span>
-          <span class="chip chip-n chip-mono">${mesh.data.counts.devices} devices</span>
-          <span class="chip chip-n chip-mono">${mesh.data.counts.acked} acked</span>
+          <span class="chip chip-n chip-mono">${esc(String(cached("mesh").data.counts.packets))} packets</span>
+          <span class="chip chip-n chip-mono">${esc(String(cached("mesh").data.counts.beacons))} beacons</span>
+          <span class="chip chip-n chip-mono">${esc(String(cached("mesh").data.counts.devices))} devices</span>
+          <span class="chip chip-n chip-mono">${esc(String(cached("mesh").data.counts.acked))} acked</span>
         </div>`
       : "";
 
-    const bundleHtml = state.bundle
-      ? renderBundle(state.bundle, state.syncState)
+    /* photo gallery strip — refs from my packets + the feed's photoRef packets */
+    const photoRefs = (() => {
+      const refs = new Set();
+      state.queue.forEach((p) => { if (p.photoRef) refs.add(p.photoRef); });
+      feed.forEach((m) => { if (m.photoRef) refs.add(m.photoRef); });
+      return Array.from(refs);
+    })();
+    const galleryHtml = photoRefs.length
+      ? `<div class="sec-label">Photos<small>downlinked through the gateway — pending ones render from this device</small></div>
+        <div class="gallery">${photoRefs.map((r) => photoThumb(r)).join("")}</div>`
       : "";
+
+    const bundleHtml = state.bundle ? renderBundle(state.bundle, state.syncState) : "";
+
+    const meshTabs = `<div class="mesh-tabs" role="tablist" aria-label="Mesh surfaces">
+      <button class="mesh-tab" data-mview="neighbors" role="tab" aria-pressed="${view === "neighbors"}">${ICONS.meshOn} Neighbors</button>
+      <button class="mesh-tab" data-mview="directs" role="tab" aria-pressed="${view === "directs"}">${ICONS.sms} Directs</button>
+      <button class="mesh-tab sky" data-mview="skywatch" role="tab" aria-pressed="${view === "skywatch"}">${ICONS.shieldS} Skywatch</button>
+    </div>`;
+
+    const composerHtml = (() => {
+      const target =
+        view === "directs"
+          ? state.dmPeer
+            ? `<div class="chips"><span class="chip chip-mono chip-mesh">DM to ${esc(state.dmPeer)}</span></div>`
+            : ""
+          : view === "skywatch"
+            ? `<div class="chips"><span class="chip chip-ok">${ICONS.shieldS} SKYWATCH</span><span class="chip chip-n">asks route to the core</span></div>`
+            : `<div class="chips">${KINDS.map((k) => `<button class="kind-chip chip chip-n" data-kind="${esc(k.id)}" aria-pressed="false">${esc(k.label)}</button>`).join("<span></span>")}</div>`;
+      const photo = state.composerPhoto
+        ? `<div class="photo-wait"><img class="msg-thumb photo-wait-img" src="${esc(state.composerPhoto.data)}" alt="attached photo"><span class="mini dim">${state.composerPhoto.kb} KB · sends with the next sync</span><button class="chip chip-n" id="photoClear" aria-label="Remove photo">✕</button></div>`
+        : "";
+      const ph = view === "neighbors" ? "What's happening around you?" : view === "directs" ? (state.dmPeer ? "Direct message — relayed by a node with signal." : "Pick a neighbor's thread above, or reply from NEIGHBORS.") : "Ask Skywatch — facts from your area brief.";
+      return `<div class="composer card" style="margin-top:14px">
+        ${target}
+        ${photo}
+        <textarea id="meshText" maxlength="280" placeholder="${esc(ph)}" aria-label="mesh message"></textarea>
+        <div class="composer-foot">
+          <span class="counter" id="meshCount">280</span>
+          <span class="chips">
+            <button class="chip chip-n" id="photoBtn" aria-label="Attach a photo">${ICONS.cam} photo</button>
+            <input type="file" id="photoInput" accept="image/*" hidden>
+            <button class="chip chip-n" id="locChip" aria-label="Reporting location — tap to change">${ICONS.pinS} ${esc(myLoc().acc ? "device" + locAcc() : "demo preset")}</button>
+            <span class="chip chip-mesh">signs with WebCrypto</span>
+          </span>
+          <button class="btn btn-primary" id="meshSend" style="min-height:42px">${ICONS.send} Send</button>
+        </div>
+      </div>`;
+    })();
 
     el.innerHTML = `
       <div class="sec-label" style="margin-top:2px">Mesh<small>${state.identNote || "the community layer — what keeps working with no bars"}</small></div>
@@ -1587,33 +1887,36 @@
       <div class="chips" style="margin-bottom:10px">
         <span class="chip ${state.identity && !state.identity.legacy ? "chip-ok" : "chip-warn"} chip-mono">${state.identity ? esc(state.identity.deviceId) : "identity pending"}</span>
         <span class="chip chip-n">Ed25519 TOFU</span>
+        ${satChip}
       </div>
-      <div class="chatwrap" id="meshChat">${chatHtml}</div>
-      <div class="composer card" style="margin-top:14px">
-        <div class="chips">
-          ${KINDS.map((k, i) => `<button class="kind-chip chip chip-n" data-kind="${esc(k.id)}" aria-pressed="false">${esc(k.label)}</button>`).join("<span></span>")}
-          <button class="kind-chip chip chip-n ask-chip" aria-pressed="false">${ICONS.shieldS} Ask Skywatch</button>
-        </div>
-        <div class="ask-prompts" id="askPrompts" hidden>
-          <span class="mini dim2">Suggested:</span>
-          ${ASKS.map((p) => `<button class="prompt-chip chip chip-n" data-prompt="${esc(p)}">${esc(p)}</button>`).join("")}
-          <span class="mini dim">answers from your brief — no live model</span>
-        </div>
-        <textarea id="meshText" maxlength="280" placeholder="What's happening around you?" aria-label="mesh message"></textarea>
-        <div class="composer-foot">
-          <span class="counter" id="meshCount">280</span>
-          <span class="chips">
-            <button class="chip chip-n" id="locChip" aria-label="Reporting location — tap to change">${ICONS.pinS} ${esc(myLoc().acc ? "device" + locAcc() : "demo preset")}</button>
-            <span class="chip chip-mesh">signs with WebCrypto</span>
-          </span>
-          <button class="btn btn-primary" id="meshSend" style="min-height:42px">${ICONS.send} Send</button>
-        </div>
-      </div>
+      ${meshTabs}
+      ${view === "neighbors" ? neighborsHtml : view === "directs" ? directsHtml : skyHtml}
+      ${composerHtml}
       <div id="meshQueue" style="margin-top:16px">${queueHtml}</div>
       ${counts}
-      <div id="meshBundle" style="margin-top:16px">${bundleHtml}</div>`;
+      <div id="meshBundle" style="margin-top:16px">${bundleHtml}</div>
+      ${galleryHtml}`;
 
     wireComposer(el);
+    el.querySelectorAll(".mesh-tab").forEach((b) => b.addEventListener("click", () => {
+      haptic(6);
+      state.meshView = b.dataset.mview;
+      renderMesh();
+    }));
+    el.querySelectorAll("[data-reply]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      haptic(6);
+      state.dmPeer = b.dataset.reply; // DM compose prefilled with the sender's hash
+      state.meshView = "directs";
+      renderMesh();
+    }));
+    el.querySelectorAll("[data-peer]").forEach((b) => b.addEventListener("click", () => {
+      haptic(6);
+      state.dmPeer = b.dataset.peer;
+      renderMesh();
+    }));
+    const dmBack = el.querySelector("[data-dm-back]");
+    if (dmBack) dmBack.addEventListener("click", () => { haptic(5); state.dmPeer = null; renderMesh(); });
     const locBar = $("#locBar", el);
     if (locBar) locBar.addEventListener("click", () => { haptic(6); askGeolocate(); });
     const locChip = $("#locChip", el);
@@ -1637,7 +1940,7 @@
       <div class="pkt-icon" style="${p.kind === "msg" ? "background:var(--accent-dim);color:var(--accent)" : ""}">${p.kind === "msg" ? ICONS.sms : KINDS.find((k) => k.id === p.status) ? ICONS.alert : ICONS.pin}</div>
       <div class="pkt-label">
         ${p.kind === "msg" ? esc(p.text || "") : esc(p.status || "")}
-        <span class="sub">${esc(p.kind.toUpperCase())} · ${esc(fmtAgo(Date.now() - p.queuedAt))} · signed at send</span>
+        <span class="sub">${esc(p.kind.toUpperCase())}${p.to ? (p.to === "SKYWATCH" ? " · to SKYWATCH" : " · DM") : ""} · ${p.photoRef ? "photo · " : ""}${esc(fmtAgo(Date.now() - p.queuedAt))} · signed at send</span>
       </div>
       ${p.state === "sent"
         ? '<span class="chip chip-ok">sent</span>'
@@ -1661,54 +1964,77 @@
 
   function wireComposer(el) {
     const ta = $("#meshText", el);
+    const view = state.meshView || "neighbors";
     ta.addEventListener("input", () => { $("#meshCount", el).textContent = String(280 - ta.value.length); });
+
     let pick = null;
-    let askOn = false;
-    const askZone = $("#askPrompts", el);
-    const askChip = el.querySelector(".ask-chip");
-    const setAsk = (on) => {
-      askOn = on;
-      if (on) pick = null;
-      el.querySelectorAll(".kind-chip").forEach((c) => c.setAttribute("aria-pressed", String(c.classList.contains("ask-chip") ? askOn : c.dataset.kind === pick)));
-      if (askZone) askZone.hidden = !on;
-      if (on) ta.focus();
-    };
-    el.querySelectorAll(".kind-chip").forEach((chip) => {
+    const kindChips = el.querySelectorAll(".kind-chip");
+    kindChips.forEach((chip) => {
       chip.addEventListener("click", () => {
         haptic(5);
-        if (chip.classList.contains("ask-chip")) { setAsk(!askOn); return; }
         pick = pick === chip.dataset.kind ? null : chip.dataset.kind;
-        if (pick && askOn) askOn = false; // one mode at a time
-        setAsk(false);
-        el.querySelectorAll(".kind-chip").forEach((c) => c.setAttribute("aria-pressed", String(c.classList.contains("ask-chip") ? askOn : c.dataset.kind === pick)));
+        el.querySelectorAll(".kind-chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.kind === pick)));
       });
     });
-    if (askZone) askZone.querySelectorAll(".prompt-chip").forEach((pc) => {
+
+    el.querySelectorAll(".prompt-chip").forEach((pc) => {
       pc.addEventListener("click", () => {
         haptic(5);
         ta.value = pc.dataset.prompt || "";
         $("#meshCount", el).textContent = String(280 - ta.value.length);
-        setAsk(true);
+        ta.focus();
       });
     });
+
+    const photoBtn = $("#photoBtn", el);
+    const photoInput = $("#photoInput", el);
+    if (photoBtn && photoInput) {
+      photoBtn.addEventListener("click", () => { haptic(5); photoInput.click(); });
+      photoInput.addEventListener("change", () => {
+        const f = photoInput.files && photoInput.files[0];
+        if (f) void attachPhoto(f);
+        photoInput.value = ""; // lets the same file be re-picked
+      });
+    }
+    const photoClear = $("#photoClear", el);
+    if (photoClear) photoClear.addEventListener("click", () => {
+      const draft = ta.value;
+      state.composerPhoto = null;
+      renderMesh();
+      const ta2 = $("#meshText", screens.mesh);
+      if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); }
+    });
+
     $("#meshSend", el).addEventListener("click", () => {
       const text = ta.value.trim();
-      if (askOn) {
-        if (!text) { toast("Type the question for Skywatch.", "warn"); return; }
-        queuePacket(null, "", text, { to: "SKYWATCH" });
+      if (!text && !state.composerPhoto) { toast("Type something, or attach a photo.", "warn"); return; }
+      if (view === "directs" && !state.dmPeer) { toast("Pick a thread first — or reply to a neighbor's message.", "warn"); return; }
+
+      let photoRef = null;
+      if (state.composerPhoto) {
+        photoRef = state.composerPhoto.ref;
+        const pending = pendingPhotos();
+        pending[photoRef] = { data: state.composerPhoto.data, label: text }; // bytes live here; uploaded after the sync
+        lsSet(LS.photos, pending);
+        state.composerPhoto = null;
+      }
+
+      if (view === "skywatch") {
+        queuePacket(null, "", text || "photo", { to: "SKYWATCH", photoRef, label: text });
         toast("Asked Skywatch — the answer rides the next sync back.", "mesh");
+      } else if (view === "directs") {
+        queuePacket(null, "", text || "photo", { to: state.dmPeer, photoRef, label: text });
+        toast("Direct to " + state.dmPeer + " queued — relayed by a node with signal.", "mesh");
       } else if (pick) {
         const def = KINDS.find((k) => k.id === pick);
         queuePacket(pick, "", "");
-        if (text) { queuePacket(null, def.id, text); }
+        if (text || photoRef) { queuePacket(null, def.id, text, { photoRef, label: text }); }
         toast(`Report queued — ${pick.toLowerCase()}.`, "mesh");
-      } else if (text) {
-        queuePacket(null, "", text);
-        toast("Message queued to the mesh.", "mesh");
       } else {
-        toast("Type something, or pick what you're reporting.", "warn");
-        return;
+        queuePacket(null, "", text || "photo", { photoRef, label: text });
+        toast("Message queued to the mesh.", "mesh");
       }
+
       haptic(10);
       ta.value = "";
       $("#meshCount", el).textContent = "280";
@@ -1719,7 +2045,7 @@
 
   function renderBundle(bundle, syncOut) {
     const acks = (bundle.acks || []).map((a) => `<div class="uplink-row"><span style="color:var(--ok)">${ICONS.check}</span><span>${esc(a.message)}</span></div>`).join("") || '<p class="mini dim">no acks in this bundle</p>';
-    const msgs = (bundle.messages || []).map((m) => `<div class="uplink-row">${/skywatch/i.test(String(m.from || "")) ? '<span style="color:var(--ok)">' + ICONS.shieldS + "</span>" : ""}<span class="mono dim">${esc(m.from)}</span><span>${esc(m.text)}</span></div>`).join("") || '<p class="mini dim">no messages for you in this bundle</p>';
+    const msgs = (bundle.messages || []).map((m) => `<div class="uplink-row">${/skywatch/i.test(String(m.from || "")) ? '<span style="color:var(--ok)">' + ICONS.shieldS + "</span>" : ""}<span class="mono dim">${esc(m.from)}</span><span>${esc(m.text)}</span>${m.photoRef ? photoThumb(m.photoRef) : ""}</div>`).join("") || '<p class="mini dim">no messages for you in this bundle</p>';
     const roads = (bundle.blockedRoads || []).map((r) => `<div class="uplink-row"><span style="color:var(--danger)">${esc(r.status.toUpperCase())}</span><span>${esc(r.name)}</span><span class="mono dim">${Math.round((r.confidence || 0) * 100)}%</span></div>`).join("") || '<p class="mini dim">no fresh road verdicts</p>';
     const syncLine = syncOut
       ? `${esc(String(syncOut.received))} received · ${esc(String(syncOut.inserted))} stored · ${esc(String(syncOut.deduped))} deduped${syncOut.rejected ? " · " + esc(String(syncOut.rejected)) + " rejected" : ""}`

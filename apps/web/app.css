@@ -445,6 +445,32 @@ svg { flex: none; }
 .core-chip { display: inline-flex; margin-bottom: 5px; }
 .core-chip svg { margin-right: 2px; }
 
+/* mesh sub-surface tabs + photos + dm threads */
+.mesh-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.mesh-tab {
+  flex: 1; min-height: 38px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  color: var(--text2); font-size: 12.5px; font-weight: 600;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.mesh-tab[aria-pressed="true"] { background: var(--mesh-dim); color: var(--mesh); border-color: rgba(164, 148, 242, 0.45); }
+.mesh-tab.sky[aria-pressed="true"] { background: var(--ok-dim); color: var(--ok); border-color: rgba(66, 206, 147, 0.4); }
+.reply-btn { font: inherit; font-size: 10.5px; font-weight: 600; color: var(--accent); background: none; border: none; padding: 0 2px; }
+.msg-thumb {
+  display: block; max-width: 210px; max-height: 156px; width: 100%;
+  border-radius: 12px; border: 1px solid var(--line2);
+  margin-top: 6px; object-fit: cover;
+}
+.photo-wait {
+  display: flex; align-items: center; gap: 9px;
+  padding: 4px 0;
+}
+.photo-wait .photo-wait-img { width: 92px; max-height: 68px; margin-top: 0; }
+.gallery { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.gallery::-webkit-scrollbar { display: none; }
+.gallery .msg-thumb { width: 68px; height: 68px; min-width: 68px; margin-top: 0; object-fit: cover; }
+
 .uplink-row {
   display: flex; align-items: center; gap: 9px; padding: 8px 2px;
   font-size: 13px; color: var(--text2);
