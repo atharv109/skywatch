@@ -8,7 +8,7 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v12";
+const CACHE_VERSION = "sw-v13";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
@@ -39,8 +39,21 @@ const PRECACHE = [
   "icons/icon-512.png",
   "icons/icon-32.png",
   "brand/logo.png",
+  /* on-device damage vision (small: the ~86 MB model weights are NOT here — see VISION_CACHE) */
+  "vision.js",
+  "vision-core.js",
+  "vision-worker.js",
+  "vision-labels.json",
   ...TILES,
 ];
+
+/* On-device vision runtime cache. The pinned transformers.js + onnxruntime-web files come from
+ * jsdelivr and are cached on first use (never at install: the SW install must not block on them).
+ * The ~86 MB model weights are kept by transformers.js itself in the Cache API ("transformers-cache");
+ * both caches are unversioned and must SURVIVE CACHE_VERSION bumps (see activate). */
+const VISION_CACHE = "sw-vision-v1";
+const KEEP_CACHES = [CACHE_VERSION, VISION_CACHE, "transformers-cache"];
+const VISION_CDN_RE = /^\/npm\/(@huggingface\/transformers|onnxruntime-web)@/;
 
 /** API prefixes — identical to the harness proxy in apps/web/server.mjs. Never cached. */
 const API_PREFIXES = [
@@ -69,7 +82,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => !KEEP_CACHES.includes(k)).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -79,6 +92,19 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return; // navigation POSTs / API writes / webhooks always pass through
 
   const url = new URL(req.url);
+  if (url.origin === "https://cdn.jsdelivr.net" && VISION_CDN_RE.test(url.pathname)) {
+    // pinned vision libs: cache-first, filled lazily the first time the photo flow loads them
+    event.respondWith(
+      caches.open(VISION_CACHE).then(async (cache) => {
+        const hit = await cache.match(req);
+        if (hit) return hit;
+        const res = await fetch(req);
+        if (res && res.ok) cache.put(req, res.clone());
+        return res;
+      }),
+    );
+    return;
+  }
   if (url.origin !== self.location.origin) return; // fonts etc — network only
   if (API_PREFIXES.some((p) => url.pathname === p || url.pathname.startsWith(p + "/"))) return;
 

@@ -1026,6 +1026,7 @@
       text: kindDef ? "" : String(text || ""),
       to: opts.to || "",   // "" = broadcast · <peer hash> = 1:1 DM · "SKYWATCH" = an Ask Skywatch question
       photoRef: opts.photoRef || null, // attached photo; bytes upload after the sync (LS pending)
+      hazard: opts.hazard || null, // on-device vision hazard fact {kind,lat,lon,confidence,label} (vision.js)
       label: kindDef ? "" : String(opts.label || ""), // photo label enum only — captions stay display-only in text
       lat: +myLoc().lat.toFixed(5),
       lon: +myLoc().lon.toFixed(5),
@@ -1083,6 +1084,7 @@
     }
     if (p.to) full.to = p.to; // DM routing (peer hash or SKYWATCH) — added after signing so the sig contract holds
     if (p.photoRef) { full.photoRef = p.photoRef; if (p.label) full.label = p.label; }
+    if (p.hazard) full.hazard = p.hazard; // not in the signed string; the API ignores unknown fields, mesh peers/chat read it
     return full;
   }
 
@@ -1532,6 +1534,7 @@
     if (onOpen) onOpen(sheet);
   }
   function closeSheet() {
+    stopNavWatch();
     $("#sheet").hidden = true; $("#sheetScrim").hidden = true;
     const pane = $(".screens");
     if (pane) pane.classList.remove("dimmed-by-sheet");
@@ -1861,6 +1864,8 @@
       });
     }
 
+    // on-device vision hazard markers (vision.js; state.hazardMarkers)
+    if (window.SkyVision) window.SkyVision.drawMarkers(ctx, p.x, p.y, view.zoom);
     // my location (under pins, over roads)
     const me = myLoc();
     const mx = p.x(me.lon), my2 = p.y(me.lat);
@@ -2033,6 +2038,113 @@
     return pts;
   }
 
+  /* ---- offline guidance maths (pure, on-device; no network) ---- */
+
+  var navWatch = null; // geolocation watch id while a shelter sheet is open
+
+  function bearingDeg(a, b) {
+    const rad = Math.PI / 180;
+    const y = Math.sin((b.lon - a.lon) * rad) * Math.cos(b.lat * rad);
+    const x = Math.cos(a.lat * rad) * Math.sin(b.lat * rad)
+      - Math.sin(a.lat * rad) * Math.cos(b.lat * rad) * Math.cos((b.lon - a.lon) * rad);
+    return (Math.atan2(y, x) / rad + 360) % 360;
+  }
+  function compassWord(deg) {
+    return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8];
+  }
+  function fmtDistM(m) { return m >= 1000 ? (m / 1000).toFixed(2) + " km" : Math.round(m) + " m"; }
+
+  /** nearest point on a [lon,lat] polyline to pt: {m: distance, idx: segment index, at: {lat,lon}, alongM: metres from line start} */
+  function snapToPolyline(pt, coords) {
+    const pts = (coords || []).filter((c) => Array.isArray(c) && c.length >= 2);
+    if (!pts.length) return null;
+    const rad = Math.PI / 180, kx = Math.cos(pt.lat * rad) * 111320, ky = 110540;
+    const px = (c) => (c[0] - pt.lon) * kx, py = (c) => (c[1] - pt.lat) * ky;
+    let best = null, cum = 0;
+    if (pts.length === 1) return { m: Math.hypot(px(pts[0]), py(pts[0])), idx: 0, at: { lat: pts[0][1], lon: pts[0][0] }, alongM: 0 };
+    for (let i = 0; i < pts.length - 1; i++) {
+      const ax = px(pts[i]), ay = py(pts[i]), bx = px(pts[i + 1]), by = py(pts[i + 1]);
+      const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy, segLen = Math.sqrt(len2);
+      const tt = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+      const d = Math.hypot(ax + tt * dx, ay + tt * dy);
+      if (!best || d < best.m) {
+        best = { m: d, idx: i, at: { lat: pts[i][1] + tt * (pts[i + 1][1] - pts[i][1]), lon: pts[i][0] + tt * (pts[i + 1][0] - pts[i][0]) }, alongM: cum + tt * segLen };
+      }
+      cum += segLen;
+    }
+    best.totalM = cum;
+    return best;
+  }
+
+  /** defensive collector: road_blocked / bridge_out markers from any layer that may exist. */
+  var HAZARD_KIND_RE = /^(road_blocked|bridge_out)$/;
+  function hazardMarkersAll() {
+    const out = [];
+    const add = (o, kind) => {
+      if (o && typeof o.lat === "number" && typeof o.lon === "number") out.push({ lat: o.lat, lon: o.lon, kind, label: o.label || o.name || "" });
+    };
+    try {
+      const hm = state.hazardMarkers;
+      (Array.isArray(hm) ? hm : (hm && Array.isArray(hm.markers) ? hm.markers : [])).forEach((o) => {
+        const k = o && (o.routeKind || o.kind || o.type); // routeKind: vision.js maps flood/blocked/landslide/... -> road_blocked, bridge -> bridge_out
+        if (HAZARD_KIND_RE.test(String(k))) add(o, k);
+      });
+      const mesh = cached("mesh");
+      const ms = mesh && mesh.data;
+      (ms && ms.hazardReports || []).forEach((hr) => {
+        const k = (hr && (hr.kind || (hr.photoVision && (hr.photoVision.kind || hr.photoVision.type)))) || "";
+        if (HAZARD_KIND_RE.test(String(k))) add(hr, k);
+      });
+      const mp = cached("mapState");
+      ((mp && mp.data && mp.data.roads) || []).forEach((rd) => {
+        if (rd && rd.status === "blocked" && rd.confidence >= 0.5) add(rd, "road_blocked");
+      });
+    } catch (e) { /* layers are optional */ }
+    return out;
+  }
+
+  /** markers within maxM (default 60 m) of the route polyline, nearest first. */
+  function routeHazardsNear(route, markers, maxM) {
+    const lim = maxM == null ? 60 : maxM;
+    const coords = route && route.geometry && route.geometry.coordinates;
+    if (!Array.isArray(coords)) return [];
+    const hits = [];
+    for (const mk of markers || []) {
+      const s = snapToPolyline(mk, coords);
+      if (s && s.m <= lim) hits.push({ kind: mk.kind, label: mk.label, offM: Math.round(s.m), alongM: Math.round(s.alongM) });
+    }
+    return hits.sort((a, b) => a.offM - b.offM);
+  }
+
+  /** live guidance card: route progress when a cached route exists, else straight-line bearing + GPS distance. */
+  function navLiveHtml(me, res, route) {
+    const direct = haversineKm(me, res) * 1000;
+    let target = res, lead = "";
+    const coords = route && route.geometry && route.geometry.coordinates;
+    const s = coords ? snapToPolyline(me, coords) : null;
+    if (s && s.m <= 150) {
+      lead = `On the cached route · ${fmtDistM(Math.max(0, (s.totalM || 0) - s.alongM))} to go`;
+    } else if (s) {
+      target = s.at;
+      lead = `${fmtDistM(s.m)} off the cached route — head ${compassWord(bearingDeg(me, s.at))} to rejoin it`;
+    } else {
+      lead = "No cached route for your start point — straight-line guide";
+    }
+    const brg = bearingDeg(me, target);
+    const brgRes = bearingDeg(me, res);
+    return `<div class="nav-compass" role="status" aria-live="polite">
+        <svg class="nav-arrow" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true" style="transform:rotate(${Math.round(brg)}deg)"><path d="M12 2l6 18-6-4-6 4z" fill="currentColor"/></svg>
+        <div><b>${esc(fmtDistM(direct))}</b> straight to ${esc(res.name.split(" ")[0])} · ${esc(compassWord(brgRes))} ${Math.round(brgRes)}&deg;
+        <p class="mini dim">${esc(lead)} · arrow is relative to north</p></div>
+      </div>`;
+  }
+
+  function hazardWarnHtml(hits) {
+    if (!hits || !hits.length) return "";
+    const lines = hits.map((h) => `${h.kind === "bridge_out" ? "Bridge out" : "Road blocked"}${h.label ? " (" + esc(h.label) + ")" : ""} — ${h.offM} m from the route, about ${fmtDistM(h.alongM)} along it`).join("<br>");
+    return `<div class="route-warn" role="alert"><span class="chip chip-danger">route flagged</span> <span class="mini">${lines}. Consider another shelter or go around on foot with care.</span></div>`;
+  }
+
   /** steps list html for the sheet ("From you: 240 m — Yesler Way / …"). */
   function routeStepsHtml(route, res) {
     const km = route.distanceKm != null ? Number(route.distanceKm) : null;
@@ -2046,11 +2158,12 @@
       return `<div class="step-row"><span class="n">${i + 1}</span><span class="t">${distLine ? "<b>" + esc(distLine) + "</b> — " : ""}${esc((s && s.text) || "")}</span></div>`;
     }).join("") || '<p class="mini dim">No turn-by-turn steps in this route pack.</p>';
     const when = fmtFetchedAt(route != null && route.fetchedAt != null ? route.fetchedAt : (route && state.routes && state.routes.at));
-    const live = route && route.source === "fixture"
-      ? `<span class="chip chip-warn">prepared route</span>`
-      : (when ? `route fetched live at ${esc(when)} · carried by the mesh` : "carried by the mesh");
-    return `${head}
+    const cachedBadge = `<span class="chip chip-n route-cached">route cached${when ? " at " + esc(when) : " on this phone"}</span>`;
+    const live = (route && route.source === "fixture" ? `<span class="chip chip-warn">prepared route</span> ` : "") + cachedBadge + " carried by the mesh · works offline";
+    const hits = routeHazardsNear(route, hazardMarkersAll());
+    return `${hazardWarnHtml(hits)}${head}
       <div class="route-card" id="stepsList" hidden>
+        ${hits.length ? '<p class="mini warn-step">Warning: a reported blocked road / bridge lies on this route — see the flag above.</p>' : ""}
         ${rows}
         <p class="mini dim" style="margin-top:8px">${live}</p>
       </div>`;
@@ -2411,6 +2524,8 @@
     // photo pipeline: a tap on a photo marker opens its lightbox (score + reasons + full image)
     const photo = hitPhotoPin(X, Y);
     if (photo) { haptic(6); openPhotoSheet(photo.hr); return; }
+    const vzMark = window.SkyVision && window.SkyVision.hitMarker(X, Y);
+    if (vzMark) { haptic(6); window.SkyVision.openMarkerSheet(vzMark); return; }
     openPinSheet(X, Y);
   });
 
@@ -2418,17 +2533,11 @@
   $("#mapZoomOut").addEventListener("click", () => { view.zoom = clamp(view.zoom / 1.35, 0.35, 2.8); drawMap(); });
   $("#mapRecenter").addEventListener("click", () => { fitAll(); drawMap(); });
 
-  /* platform-aware directions link — iOS Safari ignores geo:, so iOS gets an
-   * Apple Maps URL, Android gets the geo: intent, everything else gets the
-   * Google Maps web directions (opens in a new tab) */
-  function directionsUrl(lat, lon, name) {
-    const ua = navigator.userAgent || "";
-    const ipadOs = /Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1; // iPadOS poses as Mac
-    const isIOS = /iPhone|iPad|iPod/i.test(ua) || ipadOs;
-    const isAndroid = /Android/i.test(ua);
-    if (isIOS) return "https://maps.apple.com/?daddr=" + lat + "," + lon + (name ? "&q=" + encodeURIComponent(name) : "");
-    if (isAndroid) return "geo:" + lat + "," + lon + "?q=" + encodeURIComponent(lat + "+" + lon + (name ? " (" + name + ")" : ""));
-    return "https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lon;
+  /* directions are fully offline: the carried route (or an on-device compass
+   * fallback) in the pin sheet — the app never hands off to an external maps app */
+  function stopNavWatch() {
+    if (navWatch != null && navigator.geolocation) { try { navigator.geolocation.clearWatch(navWatch); } catch (e) { /* ignore */ } }
+    navWatch = null;
   }
 
   function openPinSheet(X, Y) {
@@ -2462,9 +2571,20 @@
       </div>
       ${r.hours ? `<p class="pin-hours">${esc(r.hours)}</p>` : `<p class="pin-hours dim">No posted hours — the status above is the freshest check-in.</p>`}
       ${carried ? routeStepsHtml(carried, r) : ""}
-      <a class="btn btn-cta btn-block" style="margin-top:14px" href="${esc(directionsUrl(r.lat, r.lon, r.name))}" target="_blank" rel="noopener">${ICONS.pin} Open in Maps (needs signal)</a>
-      <p class="mini dim2" style="margin-top:10px;text-align:center">${carried ? "The orange line is the carried route — followable offline." : "Route line is an approximate guide — not turn-by-turn navigation."}</p>
+      <div id="navLive" style="margin-top:14px">${navLiveHtml(myLoc(), r, carried)}</div>
+      <p class="mini dim2" style="margin-top:10px;text-align:center">${carried ? "The orange line is the cached route — followable offline, no signal needed." : "No cached route for this start point — the orange line is a straight-line guide; the compass above updates with your GPS."}</p>
     `, (sheet) => {
+      stopNavWatch();
+      if (navigator.geolocation && navigator.geolocation.watchPosition) {
+        try {
+          navWatch = navigator.geolocation.watchPosition((pos) => {
+            const box = $("#navLive", sheet);
+            if (!box || sheet.hidden) { stopNavWatch(); return; }
+            const me = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            box.innerHTML = navLiveHtml(me, r, carried);
+          }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+        } catch (e) { /* GPS optional — the sheet keeps the last known fix */ }
+      }
       const toggle = $("#stepsToggle", sheet), list = $("#stepsList", sheet);
       if (toggle && list) toggle.addEventListener("click", () => {
         haptic(5);
@@ -2531,17 +2651,17 @@
   function meshFeed() {
     const seen = new Set();
     const out = [];
-    const add = (from, to, text, ts, photoRef, label) => {
+    const add = (from, to, text, ts, photoRef, label, hazard) => {
       from = String(from || "");
-      if (!from || (text == null && !photoRef)) return;
+      if (!from || (text == null && !photoRef && !hazard)) return;
       const key = from + "|" + (to || "") + "|" + String(text) + "|" + String(ts);
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ from, to: to || null, text: String(text || ""), ts: +ts || 0, photoRef: photoRef || null, label: String(label || "") });
+      out.push({ from, to: to || null, text: String(text || ""), ts: +ts || 0, photoRef: photoRef || null, label: String(label || ""), hazard: hazard || null });
     };
     const mesh = cached("mesh");
-    ((mesh && mesh.data && mesh.data.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label));
-    ((state.bundle && state.bundle.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label));
+    ((mesh && mesh.data && mesh.data.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label, m.hazard));
+    ((state.bundle && state.bundle.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label, m.hazard));
     out.sort((a, b) => a.ts - b.ts);
     return out;
   }
@@ -2599,21 +2719,107 @@
       return;
     }
     haptic(8);
+    if (window.SkyVision) window.SkyVision.analyze(state.composerPhoto); // on-device damage check -> confirm sheet (vision.js)
     renderMesh(); // refresh the preview chip, keep the half-typed draft
     const ta2 = $("#meshText", screens.mesh);
-    if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); ta2.focus(); }
+    if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); ta2.dispatchEvent(new Event("input")); ta2.focus(); }
   }
 
-  function bubbleHtml(m, meId, withReply) {
+  /* ---- Messages-style threads: bubbles, runs, stamps, status, hazard cards ---- */
+  const bubbleSeen = new Set(); // keys already animated in — polls re-render, only NEW bubbles spring
+  const ICON_HAZARD = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5 2.8 19.5h18.4z"/><path d="M12 10v4.4M12 17.2v.1"/></svg>';
+  const ICON_ARROW_UP = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>';
+  const ICON_CHEV_LEFT = '<svg viewBox="0 0 24 24" width="14" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4.5 7.5 12 15 19.5"/></svg>';
+
+  function fmtStamp(ts) {
+    const d = new Date(ts);
+    if (isNaN(d)) return "";
+    const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const day0 = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day0(new Date()) - day0(d)) / 86400000);
+    if (diff <= 0) return "Today " + t;
+    if (diff === 1) return "Yesterday " + t;
+    if (diff < 7) return d.toLocaleDateString([], { weekday: "long" }) + " " + t;
+    return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t;
+  }
+
+  function hazardCardHtml(h) {
+    const lat = Number(h.lat), lon = Number(h.lon);
+    const ok = isFinite(lat) && isFinite(lon);
+    const c = Number(h.confidence);
+    const pct = isFinite(c) ? Math.round(c <= 1 ? c * 100 : c) : null;
+    const title = h.label || String(h.kind || "Hazard").replace(/_/g, " ");
+    return `<div class="hazard-card">
+      <div class="hazard-ic">${ICON_HAZARD}</div>
+      <div class="hazard-body">
+        <b class="hazard-title">${esc(title)}</b>
+        ${ok ? `<span class="hazard-loc">${esc(lat.toFixed(4))}, ${esc(lon.toFixed(4))}</span>` : ""}
+        ${pct != null ? `<span class="chip chip-warn hazard-conf">${esc(String(pct))}% confidence</span>` : ""}
+      </div>
+      ${ok ? `<button class="hazard-go" data-hazard-lat="${esc(String(lat))}" data-hazard-lon="${esc(String(lon))}">Show on map</button>` : ""}
+    </div>`;
+  }
+
+  /** o: { group: show sender labels, first, last: run position, status: text under the bubble } */
+  function bubbleHtml(m, meId, withReply, o) {
+    o = o || { first: true, last: true };
     const core = CORE_RE.test(m.from);
     const mine = m.from === meId || m.mine === true;
-    const cls = core ? "core" : mine ? "me" : "";
-    const head = core ? `<span class="chip chip-ok core-chip">${ICONS.shieldS} Skywatch</span>` : "";
+    const photoOnly = !!m.photoRef && (!m.text || m.text === "photo");
+    const key = [m.from, m.to || "", m.ts, m.text].join("|");
+    const fresh = !bubbleSeen.has(key);
+    bubbleSeen.add(key);
+    const cls = [
+      core ? "core" : mine ? "me" : "",
+      o.first ? "first" : "run",
+      o.last && !photoOnly ? "tail" : "",
+      photoOnly ? "photo" : "",
+      m.queued ? "pending" : "",
+      fresh ? "enter" : "",
+    ].filter(Boolean).join(" ");
+    const label = o.group && o.first && !mine
+      ? `<div class="bubble-from">${core ? `${ICONS.shieldS} Skywatch` : esc(String(m.from))}</div>` : "";
     const thumb = m.photoRef ? photoThumb(m.photoRef) : "";
-    const who = core ? "skywatch" : mine ? "you" : String(m.from);
-    const when = m.queued ? '<span class="chip chip-mesh">queued · will send when one of us gets signal</span>' : esc(fmtAgo(m.ts));
-    const reply = withReply && !mine && !core && !m.to ? `<button class="reply-btn" data-reply="${esc(m.from)}">↩ reply</button>` : "";
-    return `<div class="bubble ${cls}">${head}${esc(m.text)}${thumb}<div class="bubble-meta"><span>${esc(who)}</span><span>${when}</span>${reply}</div></div>`;
+    const body = photoOnly || (m.hazard && !m.text) ? "" :`<span class="btxt">${esc(m.text)}</span>`;
+    const bubble = (body || thumb) ? `<div class="bubble ${cls}">${body}${thumb}</div>` : "";
+    const hazard = m.hazard ? `<div class="bubble-attach ${mine ? "me" : ""}">${hazardCardHtml(m.hazard)}</div>` : "";
+    const reply = withReply && o.last && !mine && !core && !m.to ? `<button class="reply-btn msg-reply" data-reply="${esc(m.from)}">↩ reply</button>` : "";
+    const status = o.status ? `<div class="msg-status">${esc(o.status)}</div>` : "";
+    return label + bubble + hazard + status + reply;
+  }
+
+  /** a whole thread: centered time stamps, tight runs, status under the last outgoing bubble */
+  function threadHtml(arr, meId, opts) {
+    const group = !!opts.group;
+    const isMine = (m) => m.from === meId || m.mine === true;
+    const senderOf = (m) => (CORE_RE.test(m.from) ? "core" : isMine(m) ? "me" : String(m.from));
+    let lastOut = -1;
+    arr.forEach((m, i) => { if (isMine(m)) lastOut = i; });
+    let out = "";
+    arr.forEach((m, i) => {
+      const prev = arr[i - 1], next = arr[i + 1];
+      const gap = (a, b) => Math.abs((+b.ts || 0) - (+a.ts || 0)) > 15 * 60 * 1000;
+      const stamp = !prev || gap(prev, m);
+      if (stamp) out += `<div class="msg-stamp">${esc(fmtStamp(m.ts))}</div>`;
+      const first = stamp || senderOf(prev) !== senderOf(m);
+      const last = !next || gap(m, next) || senderOf(next) !== senderOf(m);
+      let status = "";
+      if (i === lastOut) {
+        status = m.queued ? "Sending…"
+          : (opts.view === "skywatch" && state.mode === "online") ? "Delivered"
+            : state.mode === "online" && !m.relayed ? "Delivered" : "Relayed via mesh";
+      }
+      out += bubbleHtml(m, meId, opts.reply, { group, first, last, status });
+    });
+    return out;
+  }
+
+  function focusMapOn(lat, lon) {
+    switchTab("map");
+    view.cx = clamp(lon, BOUNDS.lon0, BOUNDS.lon1);
+    view.cy = clamp(lat, BOUNDS.lat0, BOUNDS.lat1);
+    view.zoom = clamp(Math.max(view.zoom, 1.8), 0.35, 2.6);
+    drawMap();
   }
 
   function renderMesh() {
@@ -2648,10 +2854,11 @@
      * them without user action; being ON the Neighbors surface means seen) */
     const nbUnseen = view === "neighbors" ? 0 : (meId ? feed.filter((m) => !m.to && !CORE_RE.test(m.from) && m.ts > (state.nbSeenAt || 0)).length : 0);
     state.queue.filter((p) => p.kind === "msg" && !p.to && (p.state === "queued" || p.state === "fail")).forEach((p) => {
-      broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, mine: true, queued: true });
+      broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, hazard: p.hazard || null, mine: true, queued: true });
     });
     const neighborsHtml = `
-      <div class="chatwrap" id="meshChat">${broadcasts.map((m) => bubbleHtml(m, meId, true)).join("") || `<div class="empty">${ICONS.meshOn}<b>No mesh chatter yet</b><p>When you're dark, this is how people nearby share what they see.</p></div>`}</div>`;
+      <div class="msg-title">Neighbors</div>
+      <div class="chatwrap" id="meshChat">${threadHtml(broadcasts, meId, { group: true, reply: true, view: "neighbors" }) || `<div class="empty">${ICONS.meshOn}<b>No mesh chatter yet</b><p>When you're dark, this is how people nearby share what they see.</p></div>`}</div>`;
 
     /* DIRECTS — per-peer threads (1:1), one tap from any neighbor message */
     const threads = {};
@@ -2673,8 +2880,12 @@
     const dmUnseen = view === "directs" ? 0 : (meId ? feed.filter((m) => m.to === meId && !CORE_RE.test(m.from) && m.ts > (state.dmSeenAt || 0)).length : 0);
     const peerNew = (arr) => arr.some((m) => m.to === meId && !CORE_RE.test(m.from) && m.ts > (state.dmSeenAt || 0));
     const directsHtml = state.dmPeer
-      ? `<div class="sec-label" style="margin-top:2px"><button class="reply-btn" data-dm-back aria-label="All threads">← threads</button>&nbsp;→ <span class="chip chip-mono chip-mesh">${esc(state.dmPeer)}</span></div>
-          <div class="chatwrap">${dmArr.map((m) => bubbleHtml(m, meId, false)).join("") || '<div class="empty">' + ICONS.sms + '<b>New direct thread</b><p>You and ' + esc(state.dmPeer) + ' — what you send here rides the mesh, relayed by a node with signal.</p></div>'}</div>`
+      ? `<div class="msg-head">
+            <button class="msg-back" data-dm-back aria-label="All threads">${ICON_CHEV_LEFT}<span>Threads</span></button>
+            <div class="msg-avatar" aria-hidden="true">${esc(String(state.dmPeer).replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?")}</div>
+            <div class="msg-title msg-title-dm chip-mono">${esc(state.dmPeer)}</div>
+          </div>
+          <div class="chatwrap">${threadHtml(dmArr, meId, { group: false, reply: false, view: "directs" }) || '<div class="empty">' + ICONS.sms + '<b>New direct thread</b><p>You and ' + esc(state.dmPeer) + ' — what you send here rides the mesh, relayed by a node with signal.</p></div>'}</div>`
       : `<div class="chips" style="margin-bottom:10px"><span class="chip chip-mesh">relayed by a node with signal</span></div>
           ${Object.keys(threads).length
             ? Object.entries(threads).sort((a, b) => b[1][b[1].length - 1].ts - a[1][a[1].length - 1].ts).map(([peer, arr]) => {
@@ -2703,7 +2914,7 @@
         <p>facts from your area brief — no live model.</p>
         <div class="chips" style="margin-top:10px">${ASKS.map((p) => `<button class="prompt-chip chip chip-n" data-prompt="${esc(p)}">${esc(p)}</button>`).join("")}</div>
       </div>
-      <div class="chatwrap">${skyThread.map((m) => bubbleHtml(m, meId, false)).join("") || '<div class="empty">' + ICONS.meshOn + '<b>No asks yet</b><p>Pick a suggested question, or type your own.</p></div>'}</div>`;
+      <div class="chatwrap">${threadHtml(skyThread, meId, { group: false, reply: false, view: "skywatch" }) || '<div class="empty">' + ICONS.meshOn + '<b>No asks yet</b><p>Pick a suggested question, or type your own.</p></div>'}</div>`;
 
     const queueHtml = (() => {
       const recent = state.queue.slice(-14).reverse();
@@ -2763,20 +2974,24 @@
       const direct = view === "directs"
         ? `<p class="mini dim2" style="margin:0 2px">Delivered through the mesh's next node with signal — even while your status bar says No Service.</p>`
         : "";
-      return `<div class="composer card" style="margin-top:14px">
+      return `<div class="composer msg-composer" style="margin-top:14px">
         ${target}
         ${direct}
         ${photo}
-        <textarea id="meshText" maxlength="280" placeholder="${esc(ph)}" aria-label="mesh message"></textarea>
+        <div class="composer-row${state.composerPhoto ? " has-text" : ""}">
+          <button class="cmp-plus" id="photoBtn" aria-label="Attach a photo"><span class="cmp-dot">${ICONS.cam}</span></button>
+          <input type="file" id="photoInput" accept="image/*" hidden>
+          <div class="cmp-pill">
+            <textarea id="meshText" rows="1" maxlength="280" placeholder="${esc(ph)}" aria-label="mesh message"></textarea>
+            <button class="send-btn" id="meshSend" aria-label="Send"><span class="send-dot">${ICON_ARROW_UP}</span></button>
+          </div>
+        </div>
         <div class="composer-foot">
           <span class="counter" id="meshCount">280</span>
           <span class="chips">
-            <button class="chip chip-n" id="photoBtn" aria-label="Attach a photo">${ICONS.cam} photo</button>
-            <input type="file" id="photoInput" accept="image/*" hidden>
             <button class="chip chip-n" id="locChip" aria-label="Reporting location — tap to change">${ICONS.pinS} ${esc(myLoc().acc ? "device" + locAcc() : "demo preset")}</button>
             <span class="chip chip-mesh">signs with WebCrypto</span>
           </span>
-          <button class="btn btn-primary" id="meshSend" style="min-height:42px">${ICONS.send} Send</button>
         </div>
       </div>`;
     })();
@@ -2816,6 +3031,10 @@
     el.querySelectorAll("[data-peer]").forEach((b) => b.addEventListener("click", () => {
       haptic(6);
       withMeshDraft(() => { state.dmPeer = b.dataset.peer; renderMesh(); });
+    }));
+    el.querySelectorAll("[data-hazard-lat]").forEach((b) => b.addEventListener("click", () => {
+      haptic(8);
+      focusMapOn(Number(b.dataset.hazardLat), Number(b.dataset.hazardLon));
     }));
     const dmBack = el.querySelector("[data-dm-back]");
     if (dmBack) dmBack.addEventListener("click", () => {
@@ -2871,7 +3090,7 @@
     const draft = ta ? ta.value : "";
     run();
     const ta2 = $("#meshText", screens.mesh);
-    if (ta2 && draft) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); }
+    if (ta2 && draft) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); ta2.dispatchEvent(new Event("input")); }
   }
 
   function renderMeshSigChip() {
@@ -2889,7 +3108,13 @@
   function wireComposer(el) {
     const ta = $("#meshText", el);
     const view = state.meshView || "neighbors";
-    ta.addEventListener("input", () => { $("#meshCount", el).textContent = String(280 - ta.value.length); });
+    ta.addEventListener("input", () => {
+      $("#meshCount", el).textContent = String(280 - ta.value.length);
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+      const row = ta.closest(".composer-row");
+      if (row) row.classList.toggle("has-text", !!ta.value.trim() || !!state.composerPhoto);
+    });
 
     let pick = null;
     const kindChips = el.querySelectorAll(".kind-chip");
@@ -2905,7 +3130,7 @@
       pc.addEventListener("click", () => {
         haptic(5);
         ta.value = pc.dataset.prompt || "";
-        $("#meshCount", el).textContent = String(280 - ta.value.length);
+        ta.dispatchEvent(new Event("input"));
         ta.focus();
       });
     });
@@ -2926,7 +3151,7 @@
       state.composerPhoto = null;
       renderMesh();
       const ta2 = $("#meshText", screens.mesh);
-      if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); }
+      if (ta2) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); ta2.dispatchEvent(new Event("input")); }
     });
 
     el.querySelectorAll("[data-photo-label]").forEach((b) => {
@@ -3402,7 +3627,21 @@
     startPolling();
     startHealthRetry(); // queued packets from a past session drain even without a mode transition
     // debug hook (harmless; also lets the lead inspect live state from the console)
-    window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway, directionsUrl, proj, routeForResource, routeLinePts, routeStepsHtml };
+    if (window.SkyVision) {
+      window.SkyVision.attach({
+        state, toast, haptic, openSheet, closeSheet, myLoc, esc, redraw: drawMap,
+        stashPhoto(ref, data, label) { const pend = pendingPhotos(); pend[ref] = { data, label }; lsSet(LS.photos, pend); },
+        queueHazard(pl) { queuePacket(null, "", pl.text, { photoRef: pl.photoRef, label: pl.label, hazard: pl.hazard }); },
+        afterReport() {
+          const ta = $("#meshText", screens.mesh), draft = ta ? ta.value : "";
+          state.composerPhoto = null; // the photo rode the hazard packet
+          renderMeshBadge(); renderMesh();
+          const ta2 = $("#meshText", screens.mesh);
+          if (ta2 && draft) { ta2.value = draft; ta2.dispatchEvent(new Event("input")); }
+        },
+      });
+    }
+    window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway, proj, routeForResource, routeLinePts, routeStepsHtml };
 
     /* Native BLE transport seam — runs ONLY in the Capacitor native build, where
      * apps/native/sync-web.mjs injects window.SKYWATCH_NATIVE and loads native-ble.js.
