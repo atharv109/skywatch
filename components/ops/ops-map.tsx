@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { LayerGroup, Map as LeafletMap } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { hazardCentroid, VIEWS } from "@/lib/scenarios";
+import { PUGET_BOUNDS } from "@/lib/seattle";
 import { resourceSentence, resourceTone, roadSentence, roadTone } from "@/lib/status";
 import type { Hazard, Person, Resource, Road, ScenarioId } from "@/lib/types";
 
@@ -47,6 +48,10 @@ async function loadLeaflet(): Promise<LeafletNS | null> {
 
 export function OpsMap({
   picture,
+  region,
+  fitPoints,
+  user,
+  focus,
   layers,
   selectedId,
   highContrast,
@@ -57,6 +62,10 @@ export function OpsMap({
   onLocateError,
 }: {
   picture: MapPicture;
+  region: "puget" | "oakland";
+  fitPoints: [number, number][];
+  user: { lat: number; lon: number } | null;
+  focus: { lat: number; lon: number; at: number } | null;
   layers: { hazards: boolean; resources: boolean; roads: boolean; people: boolean };
   selectedId: string | null;
   highContrast: boolean;
@@ -71,13 +80,16 @@ export function OpsMap({
   const groups = useRef<Record<string, LayerGroup> | null>(null);
   const panes = useRef<Record<string, HTMLElement> | null>(null);
   const seen = useRef<Set<string> | null>(null);
+  const you = useRef<{ remove: () => void } | null>(null);
   const lastScenario = useRef<ScenarioId | null>(null);
+  const fitted = useRef(false);
+  const lastFocus = useRef(0);
   const [ready, setReady] = useState(false);
-  const data = useRef({ picture, selectedId, highContrast, reducedMotion, onSelect, onTileProblem, onLocateError, onApi });
+  const data = useRef({ picture, region, fitPoints, user, focus, selectedId, highContrast, reducedMotion, onSelect, onTileProblem, onLocateError, onApi });
 
   useEffect(() => {
-    data.current = { picture, selectedId, highContrast, reducedMotion, onSelect, onTileProblem, onLocateError, onApi };
-  }, [picture, selectedId, highContrast, reducedMotion, onSelect, onTileProblem, onLocateError, onApi]);
+    data.current = { picture, region, fitPoints, user, focus, selectedId, highContrast, reducedMotion, onSelect, onTileProblem, onLocateError, onApi };
+  }, [picture, region, fitPoints, user, focus, selectedId, highContrast, reducedMotion, onSelect, onTileProblem, onLocateError, onApi]);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,15 +98,19 @@ export function OpsMap({
       const L = await loadLeaflet();
       if (!L || cancelled || !host.current) return;
 
+      const puget = data.current.region === "puget";
       const map = L.map(host.current, {
         zoomControl: false,
         attributionControl: true,
-        minZoom: 13,
+        minZoom: puget ? 10 : 13,
         maxZoom: 18,
-        maxBounds: L.latLngBounds([37.74, -122.42], [37.9, -122.2]),
-        maxBoundsViscosity: 0.7,
+        maxBounds: puget
+          ? L.latLngBounds(PUGET_BOUNDS[0], PUGET_BOUNDS[1])
+          : L.latLngBounds([37.74, -122.42], [37.9, -122.2]),
+        maxBoundsViscosity: 0.85,
       });
       mapRef.current = map;
+      if (puget) map.setView([47.61, -122.33], 11);
 
       const tiles = L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
@@ -163,7 +179,7 @@ export function OpsMap({
       if (!L || !map || !layerGroups || cancelled) return;
 
       const snap = data.current;
-      if (lastScenario.current !== snap.picture.scenario) {
+      if (snap.region === "oakland" && lastScenario.current !== snap.picture.scenario) {
         seen.current = null;
         const view = VIEWS[snap.picture.scenario];
         if (lastScenario.current == null || snap.reducedMotion) map.setView(view.center, view.zoom);
@@ -316,6 +332,19 @@ export function OpsMap({
         );
       });
 
+      you.current?.remove();
+      you.current = null;
+      if (snap.user) {
+        you.current = L.circleMarker([snap.user.lat, snap.user.lon], {
+          radius: 8,
+          color: "#f4f1ea",
+          weight: 2,
+          fillColor: "#3dcb86",
+          fillOpacity: 0.95,
+          interactive: false,
+        }).addTo(map);
+      }
+
       seen.current = nextIds;
     }
 
@@ -323,7 +352,29 @@ export function OpsMap({
     return () => {
       cancelled = true;
     };
-  }, [ready, picture, selectedId, highContrast, reducedMotion]);
+  }, [ready, picture, selectedId, highContrast, reducedMotion, user, region]);
+
+  useEffect(() => {
+    if (!ready || region !== "puget" || fitPoints.length < 2 || fitted.current) return;
+    let cancelled = false;
+    void loadLeaflet().then((L) => {
+      const map = mapRef.current;
+      if (!L || !map || cancelled) return;
+      map.fitBounds(L.latLngBounds(fitPoints), { padding: [36, 36], maxZoom: 14 });
+      fitted.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, region, fitPoints]);
+
+  useEffect(() => {
+    if (!ready || !focus || focus.at === lastFocus.current) return;
+    lastFocus.current = focus.at;
+    mapRef.current?.setView([focus.lat, focus.lon], Math.max(mapRef.current.getZoom(), 14), {
+      animate: !reducedMotion,
+    });
+  }, [ready, focus, reducedMotion]);
 
   useEffect(() => {
     const current = panes.current;

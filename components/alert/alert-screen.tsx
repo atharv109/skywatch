@@ -11,6 +11,7 @@ import {
   TriangleAlert,
   WifiOff,
 } from "lucide-react";
+import { LiveAlert } from "@/components/alert/live-alert";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,7 @@ import { distanceKm, formatKm, freshness } from "@/lib/format";
 import { FONT_FAMILY, LANGUAGE_NAMES, LANGS, getBrief, type Lang } from "@/lib/i18n";
 import { writeLang } from "@/lib/prefs";
 import { GREEN_SHELTER, HOUSEHOLD } from "@/lib/scenarios";
+import { useSimMode } from "@/lib/sim";
 import type { ScenarioId } from "@/lib/types";
 import { useClockAnchor, useNow, useOnline } from "@/lib/use-live";
 import { cn } from "cn";
@@ -33,6 +35,7 @@ export function AlertScreen({
   initialLang: Lang;
   initialScenario: ScenarioId;
 }) {
+  const sim = useSimMode();
   const [lang, setLang] = useState<Lang>(initialLang);
   const online = useOnline();
   const anchor = useClockAnchor();
@@ -57,9 +60,12 @@ export function AlertScreen({
     writeLang(next);
   }
 
+  if (!sim) return <LiveAlert initialLang={initialLang} />;
+
   return (
-    <div dir={dir} lang={lang} style={{ fontFamily: FONT_FAMILY[lang] }} className="min-h-dvh bg-ink text-paper">
-      <div className="mx-auto min-h-dvh w-full max-w-lg px-5 pt-6 pb-32">
+    <div dir={dir} lang={lang} style={{ fontFamily: FONT_FAMILY[lang] }} className="flex h-full flex-col bg-ink text-paper">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-lg px-5 pt-6 pb-8">
         <header className="flex items-start justify-between gap-4">
           <div>
             <h1 className="sr-only">{brief.whatToDo}</h1>
@@ -189,17 +195,16 @@ export function AlertScreen({
           </ul>
         </section>
       </div>
-
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center">
-        <a
-          href="tel:911"
-          className="call-bar pointer-events-auto flex min-h-16 w-full max-w-lg items-center justify-center gap-3 bg-[#c6281c] px-5 py-3 text-center text-lg font-bold text-white"
-          style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
-        >
-          <Phone className="size-6 shrink-0" aria-hidden />
-          {brief.call911}
-        </a>
       </div>
+
+      <a
+        href="tel:911"
+        className="call-bar flex min-h-16 shrink-0 items-center justify-center gap-3 bg-[#c6281c] px-5 py-3 text-center text-lg font-bold text-white"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+      >
+        <Phone className="size-6 shrink-0" aria-hidden />
+        {brief.call911}
+      </a>
     </div>
   );
 }

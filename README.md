@@ -2,9 +2,7 @@
 
 Emergency interface for a hazard watch. Each screen has one job: join, see the situation, act on a brief, or keep going without a network.
 
-People in an emergency have less working memory, shaky hands, and very little patience. The largest type is the next fact. Color is never the only signal. Details stay one deliberate tap away.
-
-This is a design prototype. The incidents, shelters, and phone number are sample data for West Oakland — not a live dispatch.
+The live path follows the gateway around Seattle. `?sim=1` keeps the local West Oakland flood and smoke replay.
 
 ## Run
 
@@ -13,15 +11,21 @@ npm install
 npm run dev
 ```
 
-Open [http://127.0.0.1:4317](http://127.0.0.1:4317).
+Open [http://127.0.0.1:4317](http://127.0.0.1:4317). The dev server listens on port 4317.
+
+Set `SKYWATCH_API` to the gateway origin. The default is `https://skywatch-9kvd.onrender.com`. A local gateway can be `http://127.0.0.1:3000`.
+
+Set `NEXT_PUBLIC_DEMO_SIGNUP=1` to show “Watch the demo signup” on the brief. That button asks this app to sign a demo webhook. It does not collect a phone number. `SKYWATCH_WEBHOOK_SECRET` overrides the demo signing secret.
 
 ## Screens
 
-- `/` — the Photon number. Tap it to copy. Text `hi` to join.
-- `/ops` — full-screen map. Layers, marker details, and manual check-in live in bottom sheets.
-- `/alert` — the household brief in English, Español, 中文, Tagalog, Tiếng Việt, or العربية. Arabic uses a right-to-left layout.
-- `/offline` — local mesh messages, with sync disabled until the phone is online.
+- `/` — join. Text hi from your own phone, then open the brief.
+- `/ops` — full-screen map. The live map fits the Seattle hazards and shelters. Layers, marker details, and manual check-in live in the bottom sheet.
+- `/alert` — the household brief. The live brief comes from the gateway and follows its language. `?sim=1` uses the saved Oakland flood or smoke sample.
+- `/offline` — neighbor broadcast and direct messages, photo reports, and the last satellite overlay.
 
-Add `?unavailable=1` on the entry screen to see the missing-number state. On the map, Replay switches between the flood and smoke samples. The household brief follows that choice.
+`?sim=1` stays on for the browser tab. Use a new tab to return to the live gateway.
 
-The sample number is `510-555-0142`. Nothing is sent.
+## Location
+
+“Use my location” stores latitude, longitude, and accuracy on this phone. The map recenters, the shelter distance is measured from you, and mesh packets carry those coordinates. If location is off, distances say they are from a sample home in Seattle.

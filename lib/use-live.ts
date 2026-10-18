@@ -2,8 +2,7 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { Lang } from "@/lib/i18n";
-import { isLang } from "@/lib/i18n";
-import { readScenario, subscribeCheckIns, subscribeScenario, readCheckIns } from "@/lib/prefs";
+import { readCheckIns, readLang, readScenario, subscribeCheckIns, subscribeLang, subscribeScenario } from "@/lib/prefs";
 import type { CheckIn, ScenarioId, Snapshot } from "@/lib/types";
 
 function emptySubscribe() {
@@ -47,17 +46,7 @@ export function useCheckIns(isCheckIn: (value: unknown) => value is CheckIn) {
 }
 
 export function usePreferredLang(): Lang {
-  return useSyncExternalStore(
-    (onStoreChange) => {
-      window.addEventListener("storage", onStoreChange);
-      return () => window.removeEventListener("storage", onStoreChange);
-    },
-    () => {
-      const value = window.localStorage.getItem("skywatch-lang");
-      return isLang(value) ? value : "en";
-    },
-    () => "en",
-  );
+  return useSyncExternalStore(subscribeLang, readLang, () => "en");
 }
 
 let deviceKey: string | null = null;
@@ -158,7 +147,7 @@ export function useLiveFeed(scenario: ScenarioId, enabled: boolean) {
       if (poll != null) return;
       const run = async () => {
         try {
-          const res = await fetch(`/api/situation?scenario=${scenario}`, { cache: "no-store" });
+          const res = await fetch(`/api/situation?sim=1&scenario=${scenario}`, { cache: "no-store" });
           if (!res.ok) return;
           apply((await res.json()) as Snapshot);
         } catch {

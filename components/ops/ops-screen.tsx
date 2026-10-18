@@ -17,7 +17,11 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { DetailSheet, Tray } from "@/components/bottom-sheet";
+import { HelpChip } from "@/components/help-chip";
 import type { MapApi, MapPicture } from "@/components/ops/ops-map";
+import { PhotoStrip } from "@/components/ops/photo-strip";
+import { ReportLoc } from "@/components/report-loc";
+import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,7 +32,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { freshness, verifiedLabel } from "@/lib/format";
+import type { Fix } from "@/lib/location";
+import { requestLocation, useLocation } from "@/lib/location";
+import { syncMesh } from "@/lib/mesh-store";
 import { writeCheckIns, writeScenario } from "@/lib/prefs";
+import { useSimMode } from "@/lib/sim";
+import { useSituation } from "@/lib/situation-store";
 import { FIELD_REPORT, SCENARIOS } from "@/lib/scenarios";
 import {
   confidenceLabel,
@@ -63,28 +72,53 @@ function isCheckIn(value: unknown): value is CheckIn {
 }
 
 export function OpsScreen() {
+  const sim = useSimMode();
   const scenario = useClientScenario();
+  const location = useLocation();
+  const situation = useSituation(!sim, location.fix);
   const [layers, setLayers] = useState<Layers>({ hazards: true, resources: true, roads: true, people: true });
   const [expanded, setExpanded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkInFor, setCheckInFor] = useState<string | null>(null);
   const [tileProblem, setTileProblem] = useState(false);
+  const [focus, setFocus] = useState<Fix | null>(null);
+  const synced = useRef("");
   const overrides = useCheckIns(isCheckIn);
   const api = useRef<MapApi | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const online = useOnline();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const highContrast = useMedia("(prefers-contrast: more)");
-  const now = useNow(scenario != null);
+  const now = useNow(sim ? scenario != null : situation.status === "ready");
   const activeScenario = scenario ?? "flood";
-  const { link, snapshot, receivedAt, chipUntil } = useLiveFeed(activeScenario, scenario != null);
+  const { link, snapshot, receivedAt, chipUntil } = useLiveFeed(activeScenario, sim && scenario != null);
   const live = snapshot && snapshot.scenario === activeScenario ? snapshot : null;
   const available = live ? live.shelterAvailable : activeScenario === "flood" ? 22 : null;
   const fieldReport = live ? live.fieldReport : false;
   const aqi = live ? live.aqi : activeScenario === "smoke" ? 164 : null;
-  const showChip = now < chipUntil;
+  const showChip = sim && now < chipUntil;
 
   const picture: MapPicture = useMemo(() => {
+    if (!sim) {
+      const resources = situation.resources.map((resource) => {
+        const override = overrides[resource.id];
+        if (!override) return resource;
+        return {
+          ...resource,
+          status: override.status,
+          confidence: override.confidence,
+          note: override.note || resource.note,
+          available: override.status === "full" ? 0 : resource.available,
+        };
+      });
+      return {
+        scenario: "smoke",
+        hazards: situation.hazards,
+        resources,
+        roads: situation.roads,
+        people: situation.people,
+      };
+    }
     const base = SCENARIOS[activeScenario];
     const hazards = base.hazards.map((hazard) => {
       if (hazard.id === "smoke-air" && aqi != null) {
@@ -107,7 +141,7 @@ export function OpsScreen() {
       };
     });
     return { scenario: activeScenario, hazards, resources, roads: base.roads, people: base.people };
-  }, [activeScenario, aqi, fieldReport, available, overrides]);
+  }, [sim, situation, activeScenario, aqi, fieldReport, available, overrides]);
 
   const selected = useMemo(() => {
     if (!selectedId) return null;
@@ -119,6 +153,14 @@ export function OpsScreen() {
     if (road) return { kind: "road" as const, road };
     return null;
   }, [picture, selectedId]);
+
+  useEffect(() => {
+    if (sim || location.status === "unknown") return;
+    const key = location.fix ? `${location.fix.lat.toFixed(3)},${location.fix.lon.toFixed(3)}` : "sample";
+    if (synced.current === key) return;
+    synced.current = key;
+    void syncMesh(location.fix);
+  }, [sim, location.fix, location.status]);
 
   useEffect(() => {
     if (selected) titleRef.current?.focus();
@@ -163,10 +205,39 @@ export function OpsScreen() {
     toast("Check-in saved", { duration: 1600 });
   }
 
+  function locate() {
+    void requestLocation().then((fix) => {
+      if (fix) setFocus(fix);
+      else toast("Location unavailable", { duration: 1800 });
+    });
+  }
+
   const offline = online === false;
-  const statusText = offline ? "Offline" : link === "live" ? "Live" : "Reconnecting…";
-  const statusTone = offline || link !== "live" ? "warning" : "safe";
-  const age = receivedAt && now > 0 ? freshness(Math.max(0, (now - receivedAt) / 1000), "en") : "updated just now";
+  const liveReady = situation.status === "ready";
+  const statusText = sim
+    ? offline
+      ? "Offline"
+      : link === "live"
+        ? "Live"
+        : "Reconnecting…"
+    : liveReady
+      ? "Live"
+      : situation.status === "error"
+        ? "Reconnecting…"
+        : "Loading";
+  const statusTone = sim ? (offline || link !== "live" ? "warning" : "safe") : liveReady ? "safe" : "warning";
+  const age = sim
+    ? receivedAt && now > 0
+      ? freshness(Math.max(0, (now - receivedAt) / 1000), "en")
+      : "updated just now"
+    : situation.source === "backend"
+      ? "Live situation"
+      : "Seattle · gateway brief";
+  const placeTitle = sim ? SCENARIOS[activeScenario].title : situation.title || "Seattle";
+  const userPoint = useMemo(
+    () => (location.fix ? { lat: location.fix.lat, lon: location.fix.lon } : null),
+    [location.fix],
+  );
   const checkResource = picture.resources.find((item) => item.id === checkInFor) ?? null;
 
   const hazardRows = [...picture.hazards].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "danger" ? -1 : 1));
@@ -174,11 +245,18 @@ export function OpsScreen() {
   const roadRows = [...picture.roads].sort((a, b) => rankRoad(a.status) - rankRoad(b.status));
 
   return (
-    <div className="relative h-dvh overflow-hidden bg-ink text-paper">
+    <div className="relative h-full overflow-hidden bg-ink text-paper">
       <h1 className="sr-only">Operator view</h1>
-      {scenario ? (
+      {sim && !scenario ? (
+        <div className="h-full w-full bg-ink" />
+      ) : (
         <OpsMap
+          key={sim ? "oakland" : "puget"}
           picture={picture}
+          region={sim ? "oakland" : "puget"}
+          fitPoints={sim ? [] : situation.fitPoints}
+          user={userPoint}
+          focus={focus}
           layers={layers}
           selectedId={selectedId}
           highContrast={highContrast}
@@ -190,12 +268,22 @@ export function OpsScreen() {
           onTileProblem={() => setTileProblem(true)}
           onLocateError={() => toast("Location unavailable", { duration: 1800 })}
         />
-      ) : (
-        <div className="h-full w-full bg-ink" />
       )}
+      <PhotoStrip />
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
-        <div className="pointer-events-auto flex h-12 items-center gap-1 rounded-full bg-ink/85 px-1.5 ring-1 ring-white/15 backdrop-blur-md">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col items-center gap-2 px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <div className="pointer-events-auto flex items-center gap-2">
+          <HelpChip
+            title="How to read the map"
+            lines={[
+              "Red is danger or closed. Amber is a warning or unknown. Green is open.",
+              "A faded marker is low confidence.",
+              "Tap a marker for the name, status, and when it was last checked.",
+            ]}
+          />
+          <ReportLoc onGranted={setFocus} />
+        </div>
+        <div className="pointer-events-auto flex h-12 max-w-full items-center gap-1 rounded-full bg-ink/85 px-1.5 ring-1 ring-white/15 backdrop-blur-md">
           <p className="flex items-center gap-2 px-2 text-sm font-semibold" role="status">
             <span className="relative flex size-2.5" aria-hidden>
               <span className={cn("absolute inline-flex size-full rounded-full opacity-60", statusTone === "safe" ? "bg-safe live-ping" : "bg-warning")} />
@@ -210,22 +298,24 @@ export function OpsScreen() {
             {picture.hazards.length}
           </span>
           {showChip ? <span className="rounded-full bg-paper px-2 py-1 text-xs font-bold text-ink">Updated</span> : null}
-          <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 text-sm font-semibold text-paper active:bg-white/10">
-              Replay
-              <ChevronDown className="size-4" aria-hidden />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
-              <DropdownMenuRadioGroup value={activeScenario} onValueChange={(value) => chooseScenario(value as ScenarioId)}>
-                <DropdownMenuRadioItem value="flood" className="min-h-12 text-base">
-                  Flood
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="smoke" className="min-h-12 text-base">
-                  Smoke
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {sim ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 text-sm font-semibold text-paper active:bg-white/10">
+                Replay
+                <ChevronDown className="size-4" aria-hidden />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-40">
+                <DropdownMenuRadioGroup value={activeScenario} onValueChange={(value) => chooseScenario(value as ScenarioId)}>
+                  <DropdownMenuRadioItem value="flood" className="min-h-12 text-base">
+                    Flood
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="smoke" className="min-h-12 text-base">
+                    Smoke
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
       </div>
 
@@ -239,14 +329,23 @@ export function OpsScreen() {
         <MapButton label="Zoom out" onClick={() => api.current?.zoomOut()}>
           <Minus className="size-5" />
         </MapButton>
-        <MapButton label="Your location" onClick={() => api.current?.locate()}>
+        <MapButton label="Your location" onClick={locate}>
           <LocateFixed className="size-5" />
         </MapButton>
       </div>
 
       <Tray open={expanded} onOpenChange={setExpanded} label="Layers & details">
-        <p className="text-sm text-muted-foreground">Sample data · {age}</p>
-        <h2 className="mt-1 text-xl font-bold">{SCENARIOS[activeScenario].title}</h2>
+        <p className="text-sm text-muted-foreground">{sim ? `Sample data · ${age}` : age}</p>
+        <h2 className="mt-1 text-xl font-bold">{placeTitle}</h2>
+        {!sim && situation.status === "loading" ? (
+          <div className="mt-4 flex flex-col gap-3" aria-hidden>
+            <Skeleton className="h-12" />
+            <Skeleton className="h-12" />
+          </div>
+        ) : null}
+        {!sim && situation.status === "error" ? (
+          <p className="mt-3 text-base text-warning">The situation did not load. Markers stay empty until it does.</p>
+        ) : null}
         <p className="mt-3 text-base leading-snug text-muted-foreground">
           Red is danger or closed. Amber is a warning or unknown. Green is open. Faded means low confidence.
         </p>
@@ -293,11 +392,11 @@ export function OpsScreen() {
         {layers.roads ? <Rows title="Roads" items={roadRows.map(roadRow)} onOpen={select} /> : null}
 
         <div className="mt-6 flex flex-col items-start">
-          <Link className="link-quiet px-0" href={`/alert?scenario=${activeScenario}`}>
+          <Link className="link-quiet px-0" href={sim ? `/alert?scenario=${activeScenario}&sim=1` : "/alert"}>
             Household brief
           </Link>
           <Link className="link-quiet px-0" href="/">
-            Back to the number
+            Join
           </Link>
         </div>
       </Tray>

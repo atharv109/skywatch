@@ -1,4 +1,4 @@
-import type { Lang } from "@/lib/i18n";
+import { isLang, type Lang } from "@/lib/i18n";
 import type { ScenarioId } from "@/lib/types";
 
 const scenarioListeners = new Set<() => void>();
@@ -20,9 +20,23 @@ export function writeScenario(scenario: ScenarioId) {
   scenarioListeners.forEach((listener) => listener());
 }
 
+const langListeners = new Set<() => void>();
+
+export function subscribeLang(onStoreChange: () => void) {
+  langListeners.add(onStoreChange);
+  return () => langListeners.delete(onStoreChange);
+}
+
+export function readLang(): Lang {
+  if (typeof window === "undefined") return "en";
+  const value = window.localStorage.getItem("skywatch-lang");
+  return isLang(value) ? value : "en";
+}
+
 export function writeLang(lang: Lang) {
   window.localStorage.setItem("skywatch-lang", lang);
   document.cookie = `skywatch-lang=${lang}; path=/; max-age=31536000; samesite=lax`;
+  langListeners.forEach((listener) => listener());
 }
 
 const CHECKINS = "skywatch-checkins";

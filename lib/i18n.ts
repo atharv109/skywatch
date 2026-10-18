@@ -143,6 +143,15 @@ const ui = {
   }),
 };
 
+export const liveChrome = {
+  offline: ui.offlineBanner,
+  noShelter: ui.noShelter,
+  sourceLabel: ui.sourceLabel,
+  call911: ui.call911,
+  shelterHeading: ui.shelterHeading,
+  roadsHeading: ui.roadsHeading,
+};
+
 const floodHazards = [
   {
     severity: "danger" as const,

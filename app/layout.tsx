@@ -53,9 +53,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${atkinson.variable} ${notoSc.variable} ${naskh.variable} ${viet.variable} dark h-full antialiased`}
     >
-      <body className="min-h-full bg-ink text-paper">
-        {children}
-        <Toaster />
+      <body className="h-full bg-[#05080a] text-paper">
+        <div className="phone-stage">
+          <div className="phone-frame">
+            {children}
+            <Toaster />
+          </div>
+        </div>
       </body>
     </html>
   );

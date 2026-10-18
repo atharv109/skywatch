@@ -57,7 +57,7 @@ export function Tray({
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-start">
       <section
-        className="sheet-shadow pointer-events-auto w-full rounded-t-2xl border border-b-0 border-white/10 bg-ink/95 backdrop-blur-md md:ms-3 md:max-w-md"
+        className="sheet-shadow pointer-events-auto w-full rounded-t-2xl border border-b-0 border-white/10 bg-ink/95 backdrop-blur-md"
         style={{
           height: "min(72dvh, 640px)",
           transform: `translate3d(0, calc(${open ? "0px" : "100% - 4.75rem"} + ${drag}px), 0)`,
@@ -163,7 +163,7 @@ export function DetailSheet({
           paddingBottom: "env(safe-area-inset-bottom)",
         }}
       >
-        <div className="mx-auto w-full md:max-w-md">
+        <div className="mx-auto w-full">
           <div
             role="button"
             tabIndex={open ? 0 : -1}

@@ -25,7 +25,7 @@ export default function AlertPage({
   searchParams: Promise<{ scenario?: string | string[] }>;
 }) {
   return (
-    <Suspense fallback={<div className="min-h-dvh bg-ink" />}>
+    <Suspense fallback={<div className="h-full bg-ink" />}>
       <Brief searchParams={searchParams} />
     </Suspense>
   );
