@@ -18,7 +18,7 @@ import { validateRendered, hasEntityViolation, type Violation } from "./validato
 export type Fetcher = typeof fetch;
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-flash-latest"; // rolling alias — 2.0 is retired for new API keys
 const GEMINI_TIMEOUT_MS = 15_000;
 
 const LANG_NAMES: Record<Lang, string> = {

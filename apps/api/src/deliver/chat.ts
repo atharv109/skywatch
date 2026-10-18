@@ -30,7 +30,7 @@ import { confidenceFor } from "../confidence.ts";
 export const MAX_TOOL_ROUNDS = 4;
 const HISTORY_TURNS = 10;
 const GEMINI_TIMEOUT_MS = 15_000;
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-flash-latest"; // rolling alias — 2.0 is retired for new API keys
 
 export interface ChatOutcome {
   reply: string;
