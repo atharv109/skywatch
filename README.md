@@ -121,3 +121,8 @@ Note on `TOOL_SECRET`: when it is unset, the tool endpoints (`/tools/*`, `/verif
 Gated tests use the MONGODB_URI (throwaway DB). Two rules:
 - Run `npx vitest run --no-file-parallelism` — the gated files share one DB by design and must not interleave.
 - If the network breaks TLS 1.3 (campus VPNs/proxies: 'tlsv1 alert internal error' or ENOTFOUND on the mongodb+srv seed), use the non-SRV string + `NODE_OPTIONS=--tls-max-v1.2` (both are in root `.env` locally; on Render the plain `mongodb+srv` string works).
+
+### Repo layout
+- `main` = backend (apps/api + fixtures + docs) and the reference demo app + harness (apps/web).
+- **`client` branch = the shipping frontend** (skywatch-client, Next.js 16 + React 19: landing / alert / offline-mesh / ops) — same API, server-side proxy + signing.
+Both branches: public, live, real-backend everywhere.
