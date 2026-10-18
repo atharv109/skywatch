@@ -427,8 +427,27 @@
     ).join("");
     bar.addEventListener("click", (e) => {
       const btn = e.target.closest(".tab");
-      if (btn) switchTab(btn.dataset.tab);
+      if (!btn) return;
+      const tab = btn.dataset.tab;
+      if (tab === state.tab) {
+        // double-tap the ACTIVE tab = scroll the pane to top (iOS muscle memory)
+        const now = performance.now();
+        const last = bar._lastActiveTap || 0;
+        bar._lastActiveTap = now;
+        if (now - last < 320) {
+          haptic(4);
+          const pane = screens[tab];
+          if (pane) pane.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+        }
+        return;
+      }
+      switchTab(tab);
     });
+  }
+
+  function prefersReducedMotion() {
+    try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+    catch (_e) { return false; }
   }
 
   function switchTab(tab) {
@@ -850,6 +869,10 @@
         <div class="ob-foot">${footer}</div>`;
       $("#obNext", obEl).addEventListener("click", async () => {
         haptic(8);
+        if ((ob.texts || []).includes("hi")) { // Back from step 1: never re-send the "hi"
+          ob.step = 1; renderOb();
+          return;
+        }
         const ok = await obSend("hi", MIRRORED.welcome);
         if (ok) { ob.step = 1; renderOb(); }
       });
@@ -921,6 +944,29 @@
       $("#swText", obEl).addEventListener("click", (e) => e.target.setAttribute("aria-pressed", e.target.getAttribute("aria-pressed") !== "true"));
       $("#swVoice", obEl).addEventListener("click", (e) => e.target.setAttribute("aria-pressed", e.target.getAttribute("aria-pressed") !== "true"));
       $("#obFinish", obEl).addEventListener("click", () => { haptic(14); obDone(); });
+    }
+
+    // chrome added AFTER the step template: progress dots (3, active orange)
+    // under the header brand + a Back chevron on steps 1 and 2
+    const brand = $(".onboard-brand", obEl);
+    if (brand) {
+      const dots = document.createElement("div");
+      dots.className = "ob-progress";
+      dots.setAttribute("aria-label", "Step " + (ob.step + 1) + " of 3");
+      dots.innerHTML = [0, 1, 2].map((n) => `<i${n === ob.step ? ' class="on"' : ""}></i>`).join("");
+      brand.insertAdjacentElement("afterend", dots);
+    }
+    if (ob.step > 0) {
+      const back = document.createElement("button");
+      back.className = "ob-back";
+      back.setAttribute("aria-label", "Back one step");
+      back.textContent = "← Back";
+      obEl.insertBefore(back, obEl.firstChild);
+      back.addEventListener("click", () => {
+        haptic(6);
+        state.ob.step -= 1;
+        renderOb();
+      });
     }
   }
 
@@ -1164,6 +1210,26 @@
     }
   }
 
+  /* hazard detail sheet (tap on a Home hazard card): severity, timing window,
+   * all actions in order, official source — same close affordances as every sheet */
+  function openHazSheet(hz, brief) {
+    const sev = SEV.find((s) => s.n === hz.severity) || SEV[3];
+    const acts = (brief.actions || []).map((a, i) =>
+      `<div class="action-row"><span class="n">${i + 1}</span><span>${esc(a.text)}</span></div>`
+    ).join("") || '<p class="mini dim">No step-by-step actions in this brief — the severity chip above carries the level.</p>';
+    openSheet(`
+      <h3>${esc(hz.title)}</h3>
+      <div class="chips" style="margin:10px 0 0">
+        <span class="chip ${sev.cls} sev">${sev.label}</span>
+        <span class="chip chip-n">${esc(hz.timing || "active now")}</span>
+        ${hz.type ? `<span class="chip chip-n chip-mono">${esc(hz.type)}</span>` : ""}
+      </div>
+      <div class="sec-label" style="margin:14px 0 6px;font-size:14px">What Skywatch says to do — in order</div>
+      <div class="actions">${acts}</div>
+      ${brief.officialSource ? `<a class="btn btn-ghost btn-block" style="margin-top:12px" href="${esc(brief.officialSource.url || "#")}" target="_blank" rel="noopener">${ICONS.info} ${esc(brief.officialSource.name || "Official source")}</a>` : ""}
+    `);
+  }
+
   /* =========================================================================
    * HOME rendering
    * =======================================================================*/
@@ -1312,7 +1378,7 @@
             ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 5.5c1.5-1.5 4-1.5 5.5 0s4 1.5 5.5 0 4-1.5 5.5 0M3 11c1.5-1.5 4-1.5 5.5 0s4 1.5 5.5 0 4-1.5 5.5 0M3 16.5c1.5-1.5 4-1.5 5.5 0s4 1.5 5.5 0 4-1.5 5.5 0"/></svg>'
             : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 9.5a5 5 0 1 0-9.8 1.4A3.5 3.5 0 0 0 8 17.5h8a4 4 0 0 0 1-8z"/></svg>';
         const tone = hz.severity >= 3 ? "danger" : "warn";
-        return `<div class="card card-hover" style="--i:${i};margin-top:10px">
+        return `<div class="card card-hover" style="--i:${i};margin-top:10px" data-haz="${esc(hz.title)}">
           <div style="display:flex;gap:11px;align-items:center">
             <div style="width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:var(--${tone}-dim);color:var(--${tone})">${icon}</div>
             <div style="flex:1;min-width:0">
@@ -1323,6 +1389,14 @@
           </div>
         </div>`;
       }).join("");
+      hazEl.querySelectorAll("[data-haz]").forEach((cardEl) => {
+        cardEl.setAttribute("role", "button");
+        cardEl.setAttribute("aria-haspopup", "dialog");
+        cardEl.addEventListener("click", () => {
+          const hz = (brief.hazards || []).find((x) => x.title === cardEl.dataset.haz);
+          if (hz) openHazSheet(hz, brief);
+        });
+      });
     }
 
     // actions
@@ -1409,14 +1483,51 @@
     scrim.hidden = false; sheet.hidden = false;
     scrim.className = "sheet-scrim" + (cls ? " scrim-soft" : "");
     sheet.className = "sheet" + (cls ? " " + cls : "");
-    sheet.innerHTML = `<div class="sheet-grip"></div>` + html;
+    // depth cue: the page behind scales down subtly while a sheet is open
+    const pane = $(".screens");
+    if (pane) pane.classList.add("dimmed-by-sheet");
     scrim.onclick = closeSheet;
     sheet.onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
+    sheet.innerHTML = `<div class="sheet-grip"></div>` + html;
+    wireSheetGrip(sheet); // drag-down / tap on the grabber dismisses (any sheet)
     if (onOpen) onOpen(sheet);
   }
   function closeSheet() {
     $("#sheet").hidden = true; $("#sheetScrim").hidden = true;
+    const pane = $(".screens");
+    if (pane) pane.classList.remove("dimmed-by-sheet");
     if (routeTo) { routeTo = null; if (screens.map.classList.contains("active")) drawMap(); }
+  }
+
+  /* sheet grabber: a real swipe (≥60px down) dismisses from any drag on the
+   * grip; a plain tap on it also closes; ESC works per the key handler */
+  function wireSheetGrip(sheet) {
+    const grip = sheet.querySelector(".sheet-grip");
+    if (!grip || grip._wired) return;
+    grip._wired = true;
+    let sy = null, dy = 0;
+    grip.style.touchAction = "none";
+    grip.addEventListener("pointerdown", (e) => {
+      grip.setPointerCapture(e.pointerId);
+      sy = e.clientY; dy = 0;
+      sheet.style.transition = "none";
+    });
+    grip.addEventListener("pointermove", (e) => {
+      if (sy == null) return;
+      dy = Math.max(0, e.clientY - sy);
+      sheet.style.transform = "translateY(" + dy + "px)";
+      sheet.style.opacity = String(Math.max(0.55, 1 - dy / 260));
+    });
+    const end = () => {
+      if (sy == null) return;
+      sy = null;
+      sheet.style.transform = ""; sheet.style.opacity = "";
+      sheet.style.transition = "";
+      if (dy >= 60) closeSheet(); // real swipe down — dismiss
+    };
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+    grip.addEventListener("click", () => { if (dy === 0) closeSheet(); }); // plain tap on the grabber
   }
 
   function openThreadSheet() {
@@ -2451,17 +2562,21 @@
     el.querySelectorAll("[data-reply]").forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
       haptic(6);
-      state.dmPeer = b.dataset.reply; // DM compose prefilled with the sender's hash
-      state.meshView = "directs";
-      renderMesh();
+      withMeshDraft(() => {
+        state.dmPeer = b.dataset.reply; // DM compose prefilled with the sender's hash
+        state.meshView = "directs";
+        renderMesh();
+      });
     }));
     el.querySelectorAll("[data-peer]").forEach((b) => b.addEventListener("click", () => {
       haptic(6);
-      state.dmPeer = b.dataset.peer;
-      renderMesh();
+      withMeshDraft(() => { state.dmPeer = b.dataset.peer; renderMesh(); });
     }));
     const dmBack = el.querySelector("[data-dm-back]");
-    if (dmBack) dmBack.addEventListener("click", () => { haptic(5); state.dmPeer = null; renderMesh(); });
+    if (dmBack) dmBack.addEventListener("click", () => {
+      haptic(5);
+      withMeshDraft(() => { state.dmPeer = null; renderMesh(); }); // "← Threads" keeps the half-typed draft
+    });
     const locBar = $("#locBar", el);
     if (locBar) locBar.addEventListener("click", () => { haptic(6); askGeolocate(); });
     const locChip = $("#locChip", el);
@@ -2498,6 +2613,15 @@
           ? '<span class="chip chip-warn">held — sig state</span>'
           : '<span class="chip chip-mesh">queued · will send when one of us gets signal</span>'}
     </div>`;
+  }
+
+  /** switching DM surfaces never loses the half-typed composer draft */
+  function withMeshDraft(run) {
+    const ta = $("#meshText", screens.mesh);
+    const draft = ta ? ta.value : "";
+    run();
+    const ta2 = $("#meshText", screens.mesh);
+    if (ta2 && draft) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); }
   }
 
   function renderMeshSigChip() {
