@@ -73,3 +73,10 @@ export function verifiedLabel(seconds: number): string {
   if (minutes < 60) return `Last verified ${minutes} min ago`;
   return `Last verified ${Math.round(minutes / 60)} h ago`;
 }
+
+/** Loose input (+1 (555) 777-0001, 5557770001…) → E.164, or null when unusable. */
+export function normalizePhoneE164(value: string): string | null {
+  const digits = value.replace(/[^\d]/g, "");
+  const e164 = `+${digits.length === 10 ? `1${digits}` : digits}`;
+  return /^\+[1-9]\d{7,14}$/.test(e164) ? e164 : null;
+}

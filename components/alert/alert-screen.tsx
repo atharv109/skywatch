@@ -51,7 +51,6 @@ export function AlertScreen({
   }, [lang]);
 
   const km = formatKm(distanceKm(HOUSEHOLD, GREEN_SHELTER.point), lang);
-  const brief = getBrief(initialScenario, lang, km);
   const dir = lang === "ar" ? "rtl" : "ltr";
   const age = anchor === 0 || now === 0 ? freshness(0, lang) : freshness(Math.max(0, (now - anchor) / 1000), lang);
 
@@ -61,6 +60,10 @@ export function AlertScreen({
   }
 
   if (!sim) return <LiveAlert initialLang={initialLang} />;
+
+  // Sim mode only (?sim=1): the static sample brief, and every distance below is
+  // computed from the fixture coordinates, never shown live.
+  const brief = getBrief(initialScenario, lang, km);
 
   return (
     <div dir={dir} lang={lang} style={{ fontFamily: FONT_FAMILY[lang] }} className="flex h-full flex-col bg-ink text-paper">

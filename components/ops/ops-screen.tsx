@@ -263,8 +263,8 @@ export function OpsScreen() {
       : "updated just now"
     : situation.source === "backend"
       ? "Live situation"
-      : "Seattle · gateway brief";
-  const placeTitle = sim ? SCENARIOS[activeScenario].title : situation.title || "Seattle";
+      : "The live picture is unavailable";
+  const placeTitle = sim ? SCENARIOS[activeScenario].title : situation.title || "Live map";
   const userPoint = useMemo(
     () => (location.fix ? { lat: location.fix.lat, lon: location.fix.lon } : null),
     [location.fix],

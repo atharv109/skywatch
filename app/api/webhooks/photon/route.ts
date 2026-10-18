@@ -1,20 +1,22 @@
 import { createHmac } from "node:crypto";
-
-const FALLBACK_PHONE = "+15551110000";
-const DEMO_LINE = "+15551239999";
+import { normalizePhoneE164 } from "@/lib/format";
 
 /**
- * POST /api/webhooks/photon {phone?, text?} — the alert-page demo signup. The
+ * POST /api/webhooks/photon {phone, text} — the demo signup round-trip. The
  * handler constructs the REAL Stable Spectrum inbound payload ({event, space,
  * message} per photon-interface.md) and signs it server-side with the v0 scheme
- * (`X-Spectrum-Signature: v0=<hmac("v0:<ts>:<rawBody>")>`), then forwards to
- * /webhooks/photon/message. PHOTON_SIGNING_SECRET never ships to the browser and
- * the phone is never logged or echoed back.
+ * (`X-Spectrum-Signature: v0=<hmac("v0:<ts>:<rawBody>")>`, `X-Spectrum-Timestamp`),
+ * then forwards to /webhooks/photon/message. Nothing is faked: the household
+ * phone must come from the request (it keys the backend user), the demo line
+ * comes from PHOTON_DISPLAY_E164, and PHOTON_SIGNING_SECRET must be set —
+ * otherwise the handler refuses honestly. No number is logged or echoed.
  */
+const PHONE_RE = /^\+[1-9]\d{7,14}$/;
+
 export async function POST(request: Request) {
   const enabled = process.env.NEXT_PUBLIC_DEMO_SIGNUP !== "0";
   if (!enabled) {
-    return Response.json({ error: "Demo signup is off." }, { status: 404 });
+    return Response.json({ ok: false, configured: false, error: "Demo signup is off." }, { status: 404 });
   }
   let phone = "";
   let text = "hi";
@@ -23,28 +25,35 @@ export async function POST(request: Request) {
     if (typeof body?.phone === "string" && /^\+?[0-9 ()-]{4,20}$/.test(body.phone)) phone = body.phone;
     if (typeof body?.text === "string" && body.text.length > 0 && body.text.length <= 200) text = body.text;
   } catch {
-    /* No body is fine — the handler still fills the envelope. */
+    /* No body is fine — the handler still validates the pieces it has. */
   }
-  if (!phone) phone = process.env.PHOTON_DISPLAY_NUMBER || FALLBACK_PHONE;
+  const e164 = normalizePhoneE164(phone) || "";
+  if (!PHONE_RE.test(e164)) {
+    return Response.json({ ok: false, error: "A household phone number in E.164 form is required." }, { status: 400 });
+  }
+  const demoLine = (process.env.PHOTON_DISPLAY_E164 || "").trim();
+  const secret = process.env.PHOTON_SIGNING_SECRET;
+  if (!/^\+[1-9]\d{7,14}$/.test(demoLine) || !secret) {
+    return Response.json(
+      { ok: false, configured: false, error: "Demo signup needs PHOTON_DISPLAY_E164 and PHOTON_SIGNING_SECRET configured." },
+      { status: 503 },
+    );
+  }
 
   const payload = {
     event: "messages",
-    space: { id: `any;-;${phone}`, platform: "SMS", type: "dm", phone: DEMO_LINE },
+    space: { id: `any;-;${demoLine}`, platform: "SMS", type: "dm", phone: demoLine },
     message: {
       id: `spc-msg-client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
       platform: "SMS",
       direction: "inbound",
       timestamp: new Date().toISOString(),
-      sender: { id: phone, platform: "SMS" },
+      sender: { id: e164, platform: "SMS" },
       content: { type: "text", text },
     },
   };
   const raw = JSON.stringify(payload);
   const ts = String(Math.floor(Date.now() / 1000));
-  const secret = process.env.PHOTON_SIGNING_SECRET;
-  if (!secret) {
-    return Response.json({ ok: false, error: "No PHOTON_SIGNING_SECRET configured." }, { status: 503 });
-  }
   const signature = "v0=" + createHmac("sha256", secret).update(`v0:${ts}:${raw}`).digest("hex");
 
   const origin = (process.env.SKYWATCH_API || "https://skywatch-9kvd.onrender.com").replace(/\/$/, "");

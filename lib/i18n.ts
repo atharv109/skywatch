@@ -393,6 +393,13 @@ export type Brief = {
   roads: { name: string; status: "closed" | "slow" | "blocked"; statusLabel: string }[];
 };
 
+/**
+ * The STATIC sample-template brief — sim mode (?sim=1) ONLY. In live mode a brief
+ * is always a fetched one (the byPhone brief or the gateway sync bundle); when a
+ * fetch succeeded this session the static templates are never shown, and when a
+ * fetch fails the UI says so honestly (joinCopy.failed) instead of pretending
+ * with canned text.
+ */
 export function getBrief(scenario: "flood" | "smoke", lang: Lang, distance: string): Brief {
   const hazards = scenario === "flood" ? floodHazards : smokeHazards;
   const actions = (scenario === "flood" ? floodActions : smokeActions).map((item) => item[lang]);

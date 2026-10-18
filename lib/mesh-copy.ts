@@ -118,12 +118,12 @@ export const kindLabel: Record<Lang, Record<string, string>> = {
 export const joinCopy = {
   title: t({ en: "Join by text", es: "Únete por mensaje", zh: "用短信加入", tl: "Sumali sa text", vi: "Tham gia bằng tin nhắn", ar: "انضم برسالة" }),
   body: t({
-    en: "Text hi to Skywatch from your phone. This page does not ask you to type a number.",
-    es: "Manda hi a Skywatch desde tu teléfono. Esta página no pide que escribas un número.",
-    zh: "用你的手机给 Skywatch 发 hi。这个页面不会让你填写号码。",
-    tl: "I-text ang hi sa Skywatch mula sa telepono mo. Hindi hihilingin ng pahinang ito na mag-type ka ng numero.",
-    vi: "Nhắn hi cho Skywatch từ điện thoại của bạn. Trang này không yêu cầu bạn nhập số.",
-    ar: "أرسل hi إلى Skywatch من هاتفك. هذه الصفحة لا تطلب منك كتابة رقم.",
+    en: "Text hi to Skywatch from your phone, or watch the demo card run the exact gateway signup.",
+    es: "Manda hi a Skywatch desde tu teléfono, o mira la tarjeta de demostración correr el mismo registro.",
+    zh: "用你的手机给 Skywatch 发 hi，或用演示卡片替你运行同样的注册流程。",
+    tl: "I-text ang hi sa Skywatch mula sa telepono mo, o panoorin ang demo card na nagpapatakbo ng signup.",
+    vi: "Nhắn hi cho Skywatch từ điện thoại của bạn, hoặc xem thẻ demo chạy quy trình đăng ký đó.",
+    ar: "أرسل hi إلى Skywatch من هاتفك، أو شاهد بطاقة العرض تُشغّل خطوات التسجيل نفسها.",
   }),
   demo: t({
     en: "Watch the demo signup",
@@ -166,5 +166,38 @@ export const joinCopy = {
     tl: "Hindi na-load ang abiso. Nandito pa rin ang mga gagawin sa ibaba.",
     vi: "Bản tin chưa tải được. Các việc bên dưới vẫn còn.",
     ar: "لم يُحمَّل التنبيه. الإجراءات بالأسفل ما زالت هنا.",
+  }),
+
+  phoneLabel: t({
+    en: "Your phone number",
+    es: "Tu número de teléfono",
+    zh: "你的电话号码",
+    tl: "Ang numero ng telepono mo",
+    vi: "Số điện thoại của bạn",
+    ar: "رقم هاتفك",  /** L10n */
+  }),
+  zipLabel: t({
+    en: "ZIP or address (signup step)",
+    es: "Código postal o dirección (paso de registro)",
+    zh: "邮编或地址（注册步骤）",
+    tl: "ZIP o address (hakbang ng signup)",
+    vi: "ZIP hoặc địa chỉ (bước đăng ký)",
+    ar: "الرمز البريدي أو العنوان (خطوة التسجيل)",
+  }),
+  notConfigured: t({
+    en: "Demo signup is not configured on this server right now.",
+    es: "El registro de demostración no está configurado en este servidor ahora.",
+    zh: "此服务器目前未配置演示注册。",
+    tl: "Hindi naka-configure ang demo signup sa server na ito ngayon.",
+    vi: "Đăng ký demo chưa được cấu hình trên máy chủ này lúc này.",
+    ar: "التسجيل التجريبي غير مهيأ على هذا الخادم الآن.",
+  }),
+  needPhone: t({
+    en: "Enter a phone number for the demo signup.",
+    es: "Escribe un número de teléfono para el registro de demostración.",
+    zh: "填写一个电话号码以进行演示注册。",
+    tl: "Maglagay ng numero ng telepono para sa demo signup.",
+    vi: "Nhập một số điện thoại cho đăng ký demo.",
+    ar: "أدخل رقم هاتف للتسجيل التجريبي.",
   }),
 };

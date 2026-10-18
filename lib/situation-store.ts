@@ -7,7 +7,7 @@ import type { Hazard, Person, Resource, Road } from "@/lib/types";
 export type SituationView = {
   status: "idle" | "loading" | "ready" | "error";
   title: string;
-  source: "backend" | "seattle" | "";
+  source: "backend" | "";
   hazards: Hazard[];
   resources: Resource[];
   roads: Road[];
@@ -18,7 +18,7 @@ export type SituationView = {
 
 const EMPTY: SituationView = {
   status: "idle",
-  title: "Seattle",
+  title: "Live map",
   source: "",
   hazards: [],
   resources: [],
@@ -76,8 +76,8 @@ export function loadSituation(fix: Fix | null) {
       if (key !== nextKey) return;
       const next: SituationView = {
         status: "ready",
-        title: data.title || "Seattle",
-        source: data.source === "backend" ? "backend" : "seattle",
+        title: data.title || "Live map",
+        source: data.source === "backend" ? "backend" : "",
         hazards: Array.isArray(data.hazards) ? data.hazards : [],
         resources: Array.isArray(data.resources) ? data.resources : [],
         roads: Array.isArray(data.roads) ? data.roads : [],
@@ -91,7 +91,7 @@ export function loadSituation(fix: Fix | null) {
     })
     .catch(() => {
       if (key !== nextKey) return;
-      view = { ...EMPTY, status: "error", title: "Seattle" };
+      view = { ...EMPTY, status: "error", title: "Live map" };
       emit();
     });
 }

@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FONT_FAMILY, isLang, LANGUAGE_NAMES, LANGS, liveChrome, type Lang } from "@/lib/i18n";
+import { normalizePhoneE164 } from "@/lib/format";
 import { useLocation } from "@/lib/location";
 import { joinCopy, meshCopy } from "@/lib/mesh-copy";
 import { syncMesh, useMesh } from "@/lib/mesh-store";
@@ -22,6 +23,7 @@ import { writeLang } from "@/lib/prefs";
 import { SEATTLE_OEM } from "@/lib/seattle";
 import { useOnline } from "@/lib/use-live";
 import { cn } from "cn";
+import { Input } from "@/components/ui/input";
 
 /** Default ON locally — flip with NEXT_PUBLIC_DEMO_SIGNUP=0. */
 const demoSignup = process.env.NEXT_PUBLIC_DEMO_SIGNUP !== "0";
@@ -42,11 +44,15 @@ type PhoneBrief = {
   emergency?: string;
 };
 
+type PhotonState = { configured: boolean; display?: string };
+
+/**
+ * The stored demo-phone (set by the signup round-trip only — the URL `?phone=`
+ * onboarding is gone; the signup POST /api/webhooks/photon keys the user).
+ */
 function readPhone(): string {
   try {
-    const fromUrl = new URLSearchParams(window.location.search).get("phone");
-    if (fromUrl) window.localStorage.setItem(PHONE_KEY, fromUrl);
-    return fromUrl || window.localStorage.getItem(PHONE_KEY) || "";
+    return window.localStorage.getItem(PHONE_KEY) || "";
   } catch {
     return "";
   }
@@ -62,6 +68,10 @@ export function LiveAlert({ initialLang }: { initialLang: Lang }) {
   const [phone, setPhone] = useState("");
   const [phoneBrief, setPhoneBrief] = useState<PhoneBrief | null>(null);
   const [briefFailed, setBriefFailed] = useState(false);
+  const [photon, setPhoton] = useState<PhotonState | null>(null);
+  const [signupPhone, setSignupPhone] = useState("");
+  const [signupZip, setSignupZip] = useState("");
+  const [signupRunning, setSignupRunning] = useState(false);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -74,8 +84,12 @@ export function LiveAlert({ initialLang }: { initialLang: Lang }) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // The phone is a client-only read (URL first, then the stored value).
+    // The phone is a client-only read of the value the signup round-trip stored.
     queueMicrotask(() => setPhone(readPhone()));
+    void fetch("/api/photon", { cache: "no-store" })
+      .then((response) => (response.ok ? (response.json() as Promise<PhotonState>) : Promise.reject(new Error("photon"))))
+      .then((data) => setPhoton(data))
+      .catch(() => setPhoton({ configured: false }));
     if (location.status === "unknown") return;
     let cancelled = false;
     void syncMesh(location.fix).then((next) => {
@@ -135,27 +149,67 @@ export function LiveAlert({ initialLang }: { initialLang: Lang }) {
     if (fresh) {
       const response = await fetch(`/api/tools/brief/byPhone?platform=sms&phone=${encodeURIComponent(fresh)}`, { cache: "no-store" }).catch(() => null);
       if (response?.ok) {
-        setPhoneBrief((await response.json()) as PhoneBrief);
+        const data = (await response.json()) as PhoneBrief;
+        setPhoneBrief(data);
         setBriefFailed(false);
+        if (!picked.current && isLang(data.lang)) {
+          setLang(data.lang);
+          writeLang(data.lang);
+        }
+      } else {
+        setBriefFailed(true);
       }
     }
   }
 
-  async function demo() {
-    const target = phone || readPhone();
-    const response = await fetch("/api/webhooks/photon", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ phone: target || undefined, text: "hi" }),
-    });
-    const data = (await response.json().catch(() => ({}))) as { ok?: boolean; enqueued?: boolean };
-    if (data.ok) {
-      setPhone(target);
-      window.localStorage.setItem(PHONE_KEY, target);
-      toast(data.enqueued ? joinCopy.ok[lang] : joinCopy.sent[lang], { duration: 2200 });
-      void loadBrief();
-    } else {
+  /**
+   * The demo signup round-trip: the entered phone keys a REAL backend signup —
+   * one signed "hi" text, then the ZIP step — through /api/webhooks/photon, which
+   * signs the envelope server-side. When the server lacks the demo config the
+   * answer is the honest not-configured card; no number is ever faked.
+   */
+  async function runSignup() {
+    const entered = signupPhone.trim();
+    const e164 = normalizePhoneE164(entered);
+    if (!e164) {
+      toast(joinCopy.needPhone[lang], { duration: 2400 });
+      return;
+    }
+    setSignupRunning(true);
+    try {
+      const hi = await fetch("/api/webhooks/photon", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: entered, text: "hi" }),
+      });
+      const hiData = (await hi.json().catch(() => ({}))) as { ok?: boolean; configured?: boolean };
+      if (hi.status === 503 || hiData.configured === false) {
+        toast(joinCopy.notConfigured[lang], { duration: 3200 });
+        return;
+      }
+      let allOk = hiData.ok === true;
+      const zip = signupZip.trim();
+      if (allOk && zip) {
+        const step = await fetch("/api/webhooks/photon", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ phone: entered, text: zip }),
+        });
+        const stepData = (await step.json().catch(() => ({}))) as { ok?: boolean };
+        allOk = stepData.ok === true;
+      }
+      if (allOk) {
+        setPhone(e164);
+        window.localStorage.setItem(PHONE_KEY, e164);
+        toast(joinCopy.ok[lang], { duration: 2200 });
+        await loadBrief();
+      } else {
+        toast(joinCopy.sent[lang], { duration: 2200 });
+      }
+    } catch {
       toast(joinCopy.sent[lang], { duration: 2200 });
+    } finally {
+      setSignupRunning(false);
     }
   }
 
@@ -258,9 +312,32 @@ export function LiveAlert({ initialLang }: { initialLang: Lang }) {
             <h2 className="text-xl font-bold">{joinCopy.title[lang]}</h2>
             <p className="mt-2 text-lg leading-snug">{joinCopy.body[lang]}</p>
             {demoSignup ? (
-              <Button type="button" className="mt-4 h-12 min-h-12 text-base" onClick={() => void demo()}>
-                {joinCopy.demo[lang]}
-              </Button>
+              photon?.configured ? (
+                <div className="mt-4 flex flex-col gap-2">
+                  <Input
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    dir="ltr"
+                    placeholder={joinCopy.phoneLabel[lang]}
+                    value={signupPhone}
+                    onChange={(event) => setSignupPhone(event.target.value)}
+                    className="h-12 text-base"
+                  />
+                  <Input
+                    placeholder={joinCopy.zipLabel[lang]}
+                    value={signupZip}
+                    maxLength={80}
+                    onChange={(event) => setSignupZip(event.target.value)}
+                    className="h-12 text-base"
+                  />
+                  <Button type="button" className="mt-1 h-12 min-h-12 text-base" disabled={signupRunning} onClick={() => void runSignup()}>
+                    {signupRunning ? "…" : joinCopy.demo[lang]}
+                  </Button>
+                </div>
+              ) : (
+                <p className="mt-3 text-base text-warning">{joinCopy.notConfigured[lang]}</p>
+              )
             ) : null}
           </section>
 

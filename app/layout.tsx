@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Atkinson_Hyperlegible, Be_Vietnam_Pro, Noto_Naskh_Arabic, Noto_Sans_SC } from "next/font/google";
+import { LiveChip } from "@/components/live-chip";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -59,6 +60,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             {children}
             <Toaster />
           </div>
+          <LiveChip />
         </div>
       </body>
     </html>
