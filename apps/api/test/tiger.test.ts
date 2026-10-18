@@ -5,7 +5,7 @@
  * demo path; tiger.ts must stay a non-blocking optional mirror).
  */
 import { describe, expect, it } from "vitest";
-import { buildStatusEvent, forwardStatusEvents, type TigerStatusEvent, type TigerStatusRow } from "../src/verify/tiger.ts";
+import { buildStatusEvent, forwardStatusEvents, tigerClientConfig, tigerSsl, type TigerStatusEvent, type TigerStatusRow } from "../src/verify/tiger.ts";
 import type { ResourceDoc } from "../src/types/docs.ts";
 import type { Config } from "../src/config.ts";
 import { loadConfig } from "../src/config.ts";
@@ -50,6 +50,14 @@ describe("tiger.ts event builder", () => {
 
   it("returns null when the resource was never verified (verifiedAt null)", () => {
     expect(buildStatusEvent(checkedInResource({ verifiedAt: null, lastCheckin: undefined }))).toBeNull();
+  });
+
+  it("Tiger TLS posture (8-urgent fix): the client config forces the explicit ssl object — Timescale's self-signed root accepted, the URI's sslmode cannot override", () => {
+    expect(tigerClientConfig("postgres://u:p@host/db?sslmode=require")).toEqual({
+      connectionString: "postgres://u:p@host/db?sslmode=require",
+      ssl: { rejectUnauthorized: false },
+    });
+    expect(tigerSsl()).toEqual({ rejectUnauthorized: false });
   });
 
   it("forwardStatusEvents is a no-op (no throw, no writes) when TIGER_DATABASE_URL is unset", () => {

@@ -13,6 +13,27 @@ import pg from "pg";
 import type { Config } from "../config.ts";
 import type { ResourceDoc } from "../types/docs.ts";
 
+/**
+ * Timescale Cloud fronts its load balancers with a self-signed certificate chain —
+ * pg's default `rejectUnauthorized` rejects it ("self-signed certificate in
+ * certificate chain"), which killed BOTH the mirror write (silently, fire-and-forget)
+ * and the history reader (8-urgent controller probe). The TLS posture below is the
+ * FIX: an explicit ssl config object — `sslmode=require` in the URI is NOT the same
+ * as verify-full, but node-pg's connectionString parsing turns `sslmode=require`
+ * into a config that STILL rejects the self-signed root on some pg versions, so we
+ * construct the ssl object explicitly and never let the URI's sslmode override it.
+ * (Demo posture: transport is encrypted; the chain is Timescale's own CA-issued
+ * self-signed root — accept it, authenticate with the connection password as-is.)
+ */
+export function tigerSsl(): { rejectUnauthorized: false } {
+  return { rejectUnauthorized: false };
+}
+
+/** The exact client config both call sites must use (one source of truth for tests to assert). */
+export function tigerClientConfig(url: string): { connectionString: string; ssl: { rejectUnauthorized: false } } {
+  return { connectionString: url, ssl: tigerSsl() };
+}
+
 export interface TigerStatusEvent {
   resourceId: string;
   resourceName: string;
@@ -56,7 +77,7 @@ export function forwardStatusEvents(
   const url = config.tigerDatabaseUrl;
   if (!url || events.length === 0) return;
   (async () => {
-    const client = new pg.Client({ connectionString: url });
+    const client = new pg.Client(tigerClientConfig(url));
     await client.connect();
     try {
       await client.query(
@@ -105,7 +126,7 @@ export interface TigerStatusRow {
 
 export function pgStatusHistoryReader(url: string): (entity: string, hours: number, now: number) => Promise<TigerStatusRow[]> {
   return async (entity, hours, now) => {
-    const client = new pg.Client({ connectionString: url });
+    const client = new pg.Client(tigerClientConfig(url));
     await client.connect();
     try {
       const res = (await client.query(
