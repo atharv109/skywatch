@@ -93,3 +93,15 @@ SW `CACHE_VERSION` → `sw-v8`; pushed.
 ## Follow-up 7 — platform-aware Directions (pushed)
 
 Finding #7: the detail sheet's Directions used `geo:`, which iOS Safari ignores. The sheet CTA is now platform-aware (`directionsUrl` in app.js, exposed on the `window.__sky` debug hook): iOS (iPhone/iPad/iPod incl. iPadOS-as-Mac via `maxTouchPoints > 1`) → `https://maps.apple.com/?daddr=<lat>,<lon>&q=<name>`; Android → `geo:<lat>,<lon>?q=<lat>+<lon>(<name>)`; other → `https://www.google.com/maps/dir/?api=1&destination=<lat>,<lon>`; always `target="_blank" rel="noopener"`. Uses the pin's own coords + name from state. Verified headless across four UA matrices (iPhone UA, Android UA, desktop UA, iPadOS masquerade with maxTouchPoints=5 emulated): all four resolve to the right URL/target. SW `sw-v9`; pushed. Untested on a physical device — the Apple Maps URL shape is standard (`?daddr=` opens the Maps app with drive directions), but the coordinator should give it one tap on the demo iPhone before the live moment.
+
+## Follow-up 8 — QOL/navigation batch (pushed)
+
+All eight landed; verified headless touch 390×844 (`smoke-qol`), SW `sw-v10`:
+1. Sheet grabber: real swipe-down (>=60px, finger-follow with opacity) OR tap on the grabber OR tap on the 28% scrim OR ESC dismisses every sheet; the grip renders always (it was accidentally dropped from openSheet during this batch's first refactor — caught by the smoke's hasGrip assertion and restored).
+2. Onboarding Back chevron top-left on steps 1–2; re-continue after Back never duplicates the "hi" thread entry (dedupe guard) — hiCount stays 1 across a Back→Continue cycle.
+3. Progress dots under the onboarding header; active dot orange, index follows the step (asserted at step 1 and after Back→Continue).
+4. DM thread "← Threads" (the existing data-dm-back control) now preserves the half-typed composer draft across leaving/returning (draft "Be there in ten" restored on re-entry); peer-row and reply-button switches use the same draft guard.
+5. Home hazard cards open a detail sheet (severity chip, timing window, all actions numbered in order, officialSource link) with the same close affordances.
+6. Double-tap the ACTIVE tab scrolls that pane to top (smooth; reduced-motion -> auto) — Playwright's tap pipeline adds >320ms between taps, so the smoke uses dispatched taps; on-device double-taps (~100–200ms) sit well inside the 320ms window.
+7. Sheet-open depth cue: the pane behind scales to 0.985 + slight dim; cleared on close.
+8. ESC desktop close already existed; scrim tap + grabber verified above.
