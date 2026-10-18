@@ -17,6 +17,7 @@
     "hono": "^4.10.2",
     "mongodb": "^6.20.0",
     "pg": "^8.23.1",
+    "spectrum-ts": "^12.11.0",
     "tsx": "^4.20.6"
   },
   "devDependencies": {
