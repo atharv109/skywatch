@@ -174,6 +174,14 @@ export async function processVoiceOutcome(
   }
   const agentId = typeof data.agent_id === "string" ? data.agent_id : null;
   if (agentId) {
+    // KNOWN RACE (documented limitation, deliberate): routing is by agent, so two
+    // CONCURRENT check-in calls on one ElevenLabs agent can cross-wire — the later
+    // outcome pins onto the most-recent dispatched request. Keying on the payload's
+    // per-call `conversation_id` is NOT possible in the current contract: dispatch
+    // happens out-of-band via GET /tools/checkin/next (Delivery dials from its own
+    // contact book) and the request's conversationId only exists AFTER an outcome
+    // is recorded. Closing the race needs Delivery to carry the conversation_id
+    // back at dispatch time (contract change) — out of scope for a demo hardening.
     const request = await deps.verify.latestDispatchedByAgent(agentId);
     if (request) {
       await deps.verify.recordOutcome(request.requestId, outcome, data.conversation_id ?? null, deps.now);

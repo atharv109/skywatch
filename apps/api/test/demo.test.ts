@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Db } from "mongodb";
 import { loadConfig, type Config } from "../src/config.ts";
-import { COLLECTIONS, closeDb, getDb } from "../src/db/client.ts";
+import { COLLECTIONS, closeDb, getDb, NoMongoError } from "../src/db/client.ts";
 import { createApp } from "../src/server.ts";
 import { memoryStore } from "../src/store.ts";
 import { memoryMatchStore } from "../src/match/store.ts";
@@ -291,6 +291,64 @@ describe("Task 8h: POST /demo/brief (continue with the already-SMS-signed-up acc
     expect((await h.app.request("/demo/brief", { method: "POST", body: JSON.stringify({ phone: PHONE, platform: "imessage" }), headers: { "content-type": "application/json" } })).status).toBe(404);
   });
 });
+
+describe("Task 8g/harding: /demo/* degrade when Mongo is down (NoMongoError -> honest 503, never an unhandled 500)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /** Same harness shape as above, but deliver/match throw like a down Mongo (NoMongoError path). */
+  function downHarness() {
+    const astore = memoryStore();
+    const config = loadConfig({
+      DEMO_SIGNUP: "1",
+      PHOTON_WEBHOOK_SIGNING_SECRET: "demo-secret",
+      PUBLIC_BASE_URL: "https://demo.example",
+      REPLAY: "1",
+    });
+    const dstore = memoryDeliverStore();
+    const down = async (): Promise<never> => {
+      throw new NoMongoError();
+    };
+    const inbound = createInboundRuntime({
+      config,
+      store: async () => dstore,
+      now: () => Date.now(),
+      geocode: async () => null,
+      appStore: async () => astore,
+    });
+    const app = createApp(config, {
+      store: async () => astore,
+      pipeline: async () => emptyPipelineResult(),
+      inbound,
+      match: down as never,
+      deliver: down as never,
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
+    });
+    return { app };
+  }
+
+  it("signup / area-brief / brief all answer 503 with a plain error body when the backend store is down", async () => {
+    const h = downHarness();
+    const post = (url: string, body: Record<string, unknown>) =>
+      h.app.request(url, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+
+    const signupDown = await post("/demo/signup", { phone: PHONE, platform: "sms", texts: ["hi"] });
+    expect(signupDown.status).toBe(503);
+    expect(((await signupDown.json()) as { error: string }).error).toBeTruthy();
+
+    const areaDown = await post("/demo/area-brief", { lat: ZIP_LAT, lon: ZIP_LON });
+    expect(areaDown.status).toBe(503);
+    expect(((await areaDown.json()) as { error: string }).error).toBeTruthy();
+
+    const briefDown = await post("/demo/brief", { phone: PHONE });
+    expect(briefDown.status).toBe(503);
+    expect(((await briefDown.json()) as { error: string }).error).toBeTruthy();
+  });
+});
+
 
 // Real-Mongo block: the demo route over defaultDeps (same real signup path the
 // webhook route serves; cleans ONLY its own keys).

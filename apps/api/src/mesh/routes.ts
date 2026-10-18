@@ -189,7 +189,13 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
       const reasons: string[] = [];
       const deviceId = typeof body["deviceId"] === "string" ? body["deviceId"] : null;
       const photoRef = typeof body["photoRef"] === "string" ? body["photoRef"] : null;
-      const data = typeof body["data"] === "string" ? body["data"] : null;
+      // CONTRACT (upload): `data` is BARE base64. Belt-and-braces: browser
+      // FileReader emits the `data:<mime>;base64,` URL form — an OPTIONAL prefix
+      // is accepted and STRIPPED here, so a prefixed client never dies with a
+      // silent/unclear 400 (the stored + served bytes are always the bare form).
+      const dataRaw = typeof body["data"] === "string" ? body["data"] : null;
+      const data = dataRaw === null ? null : dataRaw.replace(/^data:([\w./+-]+);base64,/i, "");
+      const prefixStripped = dataRaw !== null && data !== dataRaw;
       const label = body["label"];
       // AUTH (TOFU, keep-simple): the deviceId must already be a PINNED device —
       // a real pubkey — so the upload is bound to a device whose packets verify.
@@ -206,9 +212,11 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
       }
       let bytes: Buffer | null = null;
       if (data === null) {
-        reasons.push("data must be base64 image bytes");
+        reasons.push("data must be base64 image bytes (bare base64; an optional data:<mime>;base64, prefix is accepted)");
       } else if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || data.length % 4 !== 0) {
-        reasons.push("data must be well-formed base64");
+        reasons.push(prefixStripped
+          ? "data must be well-formed base64 (the data:<mime>;base64, prefix was accepted and stripped; what remains is not base64)"
+          : "data must be well-formed base64 (bare base64; an optional data:<mime>;base64, prefix is accepted)");
       } else {
         const decoded = Buffer.from(data, "base64");
         if (decoded.length === 0) reasons.push("data decodes to zero bytes");

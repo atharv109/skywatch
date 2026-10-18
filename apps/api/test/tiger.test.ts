@@ -53,11 +53,38 @@ describe("tiger.ts event builder", () => {
   });
 
   it("Tiger TLS posture (8-urgent fix): the client config forces the explicit ssl object — Timescale's self-signed root accepted, the URI's sslmode cannot override", () => {
+    // pg-connection-string turns the URI's `sslmode=require` into `ssl: {}`, and
+    // node-pg's ConnectionParameters Object-assigns the parsed URI OVER the explicit
+    // config — so the fix must STRIP the ssl query params, not just set an ssl object.
     expect(tigerClientConfig("postgres://u:p@host/db?sslmode=require")).toEqual({
-      connectionString: "postgres://u:p@host/db?sslmode=require",
+      connectionString: "postgres://u:p@host/db",
       ssl: { rejectUnauthorized: false },
     });
+    // a URL without ssl params round-trips unchanged
+    expect(tigerClientConfig("postgres://u:p@host/db")).toEqual({
+      connectionString: "postgres://u:p@host/db",
+      ssl: { rejectUnauthorized: false },
+    });
+    // the Tiger-style connection string carries several ssl keys — all stripped, host/creds/query kept
+    const stripped = tigerClientConfig("postgres://u:p@h.tsdb.cloud.timescale.com:33284/tsdb?sslmode=require&uselibpqcompat=true&application_name=skywatch");
+    expect(stripped.connectionString).not.toContain("sslmode");
+    expect(stripped.connectionString).not.toContain("uselibpqcompat");
+    expect(stripped.connectionString).toContain("application_name=skywatch");
+    expect(stripped.connectionString).toContain("h.tsdb.cloud.timescale.com:33284/tsdb");
+    // a non-URL string passes through untouched (pg surfaces its own error)
+    expect(tigerClientConfig("not-a-url")).toEqual({ connectionString: "not-a-url", ssl: { rejectUnauthorized: false } });
     expect(tigerSsl()).toEqual({ rejectUnauthorized: false });
+  });
+
+  it("regression (deployed 503): node-pg's REAL ConnectionParameters resolves the Tiger URL to rejectUnauthorized=false", async () => {
+    // No stubbing: this pins the actual installed pg behavior so a pg upgrade that
+    // changes connection-string merging fails LOUDLY here instead of in production.
+    // @ts-expect-error no published typings for the pg internals subpath (exports-map gap)
+    const { default: ConnectionParameters } = (await import("pg/lib/connection-parameters.js")) as unknown as {
+      default: new (config: unknown) => { ssl: unknown };
+    };
+    const params = new ConnectionParameters(tigerClientConfig("postgres://u:p@host/db?sslmode=require"));
+    expect(params.ssl).toEqual({ rejectUnauthorized: false });
   });
 
   it("forwardStatusEvents is a no-op (no throw, no writes) when TIGER_DATABASE_URL is unset", () => {
@@ -148,6 +175,15 @@ describe("GET /tools/status-history (Tiger READ, injected rows)", () => {
     const gated = appWithHistory(fakeRows, { TOOL_SECRET: "s3cret" });
     expect((await gated.request("/tools/status-history?entity=8h-shelter")).status).toBe(401);
     expect((await gated.request("/tools/status-history?entity=8h-shelter", { headers: { "X-Skywatch-Tool-Secret": "s3cret" } })).status).toBe(200);
+  });
+
+  it("a read failure returns 503 with the UNDERLYING pg reason (no blanket 503 hiding TLS/timeout bugs)", async () => {
+    const failing = appWithHistory(() => Promise.reject(new Error("self-signed certificate in certificate chain")));
+    const { res, j } = await get(failing, "/tools/status-history?entity=8h-shelter&hours=6");
+    expect(res.status).toBe(503);
+    expect(j.configured).toBe(true);
+    expect(j.error).toContain("Tiger Data read failed");
+    expect((j as { reason?: string }).reason).toContain("self-signed certificate");
   });
 
   it("validation: entity required; hours in (0,168] with default 6; the reader receives the parsed hours", async () => {

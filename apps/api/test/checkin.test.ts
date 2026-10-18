@@ -207,6 +207,22 @@ describe("POST /tools/checkin (voice + manual, ONE endpoint)", () => {
     };
     expect(res.resource.lastCheckin.notes).toHaveLength(200);
   });
+
+  it("size caps at the edge: over-cap resourceId/notes/userId/capacity are 400 and never reach the store", async () => {
+    const h = harness({ resources: [resource()] });
+    const r = (body: Record<string, unknown>) => toolPost(h.app, "/tools/checkin", body);
+    expect((await r({ resourceId: "r".repeat(129), status: "open" })).status).toBe(400);
+    expect((await r({ resourceId: "seed-shelter-1", status: "open", notes: "x".repeat(4001) })).status).toBe(400);
+    expect((await r({ resourceId: "seed-shelter-1", status: "open", userId: "u".repeat(129) })).status).toBe(400);
+    expect((await r({ resourceId: "seed-shelter-1", status: "open", userId: 42 })).status).toBe(400);
+    expect((await r({ resourceId: "seed-shelter-1", status: "open", capacity: 1_000_001 })).status).toBe(400);
+    expect((await r({ resourceId: "seed-shelter-1", status: "open", capacity: "not-a-number" })).status).toBe(400);
+    // nothing was applied (the resource is untouched)
+    const stored = await h.astore.getResource("seed-shelter-1");
+    expect(stored?.status).toBe("unknown");
+    // in-range values still pass (caps bound, not block, normal calls)
+    expect((await r({ resourceId: "seed-shelter-1", status: "open", capacity: 1_000_000, notes: "ok" })).status).toBe(200);
+  });
 });
 
 describe("tool-secret auth (checkin + verify/run + roads)", () => {

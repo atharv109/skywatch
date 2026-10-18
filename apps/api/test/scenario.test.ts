@@ -133,6 +133,19 @@ describe("POST /scenario/:id/replay", () => {
     expect(res.status).toBe(503);
     expect(((await res.json()) as { error: string }).error).toMatch(/mongo down/);
   });
+
+  it("auth: TOOL_SECRET set -> 401 without/wrong secret, replays with it (same scheme as /tools/*); unset stays open (demo-grade)", async () => {
+    const store = memoryStore();
+    const app = createApp(loadConfig({ TOOL_SECRET: "tool-secret" }), depsWith(store));
+    expect((await app.request("/scenario/smoke/replay", { method: "POST" })).status).toBe(401);
+    expect(
+      (await app.request("/scenario/smoke/replay", { method: "POST", headers: { "X-Skywatch-Tool-Secret": "wrong" } })).status,
+    ).toBe(401);
+    const ok = await app.request("/scenario/smoke/replay", { method: "POST", headers: { "X-Skywatch-Tool-Secret": "tool-secret" } });
+    expect(ok.status).toBe(200);
+    const okBearer = await app.request("/scenario/flood/replay", { method: "POST", headers: { Authorization: "Bearer tool-secret" } });
+    expect(okBearer.status).toBe(200);
+  });
 });
 
 // Full pipeline against real Mongo: runs when MONGODB_URI is set (same rule as Task 1's db test).

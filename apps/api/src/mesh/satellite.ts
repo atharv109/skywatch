@@ -75,6 +75,7 @@ export async function fetchSatelliteSection(
   point: { lat: number; lon: number },
   now = Date.now(),
   injFetcher?: Fetcher,
+  airnowApiKey: string | null = null,
 ): Promise<SatelliteFetch | null> {
   const doFetch: Fetcher =
     injFetcher ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(SAT_FETCH_TIMEOUT_MS) }));
@@ -85,7 +86,9 @@ export async function fetchSatelliteSection(
       // bounds the whole snapshot to one 5 s timeout per source (runs in parallel).
       fetchSmokeFeatures({ fetcher: doFetch, maxPages: 1, pageSize: 2000 }),
       fetchNwsAlerts(point, { fetcher: doFetch }),
-      fetchAqiObservation(point, { fetcher: doFetch, airnowApiKey: null }),
+      // AIRNOW_API_KEY wired from the config (fetchAqiObservation falls back to
+      // Open-Meteo when null — the previous hardcoded behavior, no crash either way).
+      fetchAqiObservation(point, { fetcher: doFetch, airnowApiKey }),
     ]);
     const bbox = bboxAround(point.lat, point.lon);
     const plumeHits = plumes.filter((f) => intersectsBbox(f.geometry, bbox)).slice(0, SAT_PLUMES_CAP);
@@ -122,7 +125,7 @@ export function makeSatelliteFetcher(
 ): (lat: number, lon: number, now: number) => Promise<SatelliteSection | null> {
   if (!config.liveSync) return () => Promise.resolve(null);
   return async (lat, lon, now) => {
-    const out = await fetchSatelliteSection({ lat, lon }, now, injFetcher);
+    const out = await fetchSatelliteSection({ lat, lon }, now, injFetcher, config.airnowApiKey);
     if (!out) return null;
     const store = await deps.store(config);
     for (const doc of out.hazards) await store.upsertHazard(doc);

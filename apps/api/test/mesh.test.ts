@@ -820,6 +820,36 @@ describe("Task 8e: mesh photos + satellite overlay", () => {
     expect((await h.meshStore.getPhoto("r-big"))).toBeNull(); // rejected uploads store nothing
   });
 
+  it("data-URL contract: an optional data:<mime>;base64, prefix is accepted and stripped (stores + serves the bare form); a malformed body names the prefix rule", async () => {
+    const h = harness();
+    const deviceId = "mesh-test-photo-device-dataurl";
+    await pinnedDevice(h, deviceId);
+
+    // browser FileReader form — previously a silent/unclear 400 against the regex
+    const prefixed = `data:image/jpeg;base64,${imageBytes(64).toString("base64")}`;
+    const ok = await postPhoto(h, { deviceId, photoRef: "mesh-test-photo-dataurl", data: prefixed, label: "flood" });
+    expect(ok.status).toBe(200);
+    const stored = await h.meshStore.getPhoto("mesh-test-photo-dataurl");
+    expect(stored).not.toBeNull();
+    expect(stored!.data.startsWith("data:")).toBe(false); // only the BARE form is ever stored
+    expect(stored!.bytes).toBe(64);
+    const served = await h.app.request("/mesh/photo/mesh-test-photo-dataurl");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toBe("image/jpeg");
+
+    // a prefix whose remainder is NOT base64: 400 with a reason that says the prefix was stripped
+    const bad = await postPhoto(h, { deviceId, photoRef: "r-bad-prefix", data: "data:image/jpeg;base64,not-b64!!" });
+    expect(bad.status).toBe(400);
+    const badBody = (await bad.json()) as { error: string; reasons: string[] };
+    expect(badBody.error).toContain("prefix was accepted and stripped");
+    expect(badBody.reasons.length).toBeGreaterThan(0);
+
+    // a bare-bad body names the bare contract
+    const bareBad = await postPhoto(h, { deviceId, photoRef: "r-bad-bare", data: "@#$%" });
+    expect(bareBad.status).toBe(400);
+    expect(((await bareBad.json()) as { error: string }).error).toContain("bare base64");
+  });
+
   it("photoRef rides packets: hazard reports render hasPhoto/photoKind/photoUrl once (and only once) the bytes arrive", async () => {
     const h = harness();
     const deviceId = "mesh-test-photo-device-4";
@@ -868,9 +898,27 @@ describe("Task 8e: mesh photos + satellite overlay", () => {
       if (u.includes("services2.arcgis.com")) return new Response(JSON.stringify({ ...PLUME_GEOJSON, features: routes.plumes }), { status: 200 });
       if (u.includes("api.weather.gov")) return new Response(JSON.stringify({ type: "FeatureCollection", features: routes.alerts }), { status: 200 });
       if (u.includes("open-meteo")) return new Response(JSON.stringify(openMeteo), { status: 200 });
+      if (u.includes("airnowapi.org")) return new Response(JSON.stringify(routes.airnow ?? []), { status: 200 });
       throw new Error(`unexpected url ${u}`);
     }) as unknown as typeof fetch;
   }
+
+  it("AIRNOW_API_KEY wired: a set key switches the satellite AQI fetch to AirNow (key in the URL); unset keeps the Open-Meteo fallback", async () => {
+    const airnowRows = [{ DateObserved: "2026-10-17", AQI: 88, Latitude: 47.6, Longitude: -122.3, ParameterName: "PM2.5", ReportingArea: "Seattle" }];
+    const fetcher = satFetch({ plumes: [], alerts: [], airnow: airnowRows });
+    const out = await fetchSatelliteSection({ lat: 47.6, lon: -122.33 }, NOW, fetcher, "airnow-test-key");
+    expect(out).not.toBeNull();
+    expect(out!.section.aqi).toMatchObject({ aqi: 88, source: "AirNow" });
+    const calledUrls = (fetcher as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(calledUrls.some((u) => u.includes("airnowapi.org") && u.includes("API_KEY=airnow-test-key"))).toBe(true);
+    expect(calledUrls.some((u) => u.includes("open-meteo"))).toBe(false);
+
+    // route level: SKYWATCH_LIVE_SYNC + AIRNOW_API_KEY set -> the synced bundle carries the AirNow obs
+    const hOn = harness({ env: { SKYWATCH_LIVE_SYNC: "1", AIRNOW_API_KEY: "airnow-test-key" } });
+    vi.stubGlobal("fetch", satFetch({ plumes: [], alerts: [], airnow: airnowRows }));
+    const synced = (await (await syncPackets(hOn, GW, 47.6, -122.33, [packet(makeSigner(GW))])).json()) as SyncBody;
+    expect(synced.bundle.satellite?.aqi).toMatchObject({ aqi: 88, source: "AirNow" });
+  });
 
   it("satellite snapshot (unit): plumes/alerts bbox-filtered + capped, AQI rides, normalized hazards come out of the EXISTING ingest normalizers", async () => {
     const fetcher = satFetch({

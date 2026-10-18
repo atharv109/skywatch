@@ -31,7 +31,28 @@ export function tigerSsl(): { rejectUnauthorized: false } {
 
 /** The exact client config both call sites must use (one source of truth for tests to assert). */
 export function tigerClientConfig(url: string): { connectionString: string; ssl: { rejectUnauthorized: false } } {
-  return { connectionString: url, ssl: tigerSsl() };
+  // THE DEPLOYED-READ 503 ROOT CAUSE: node-pg merges the parsed connectionString
+  // OVER the explicit config (Object.assign({}, config, parse(connectionString))),
+  // and pg-connection-string >=2.7 turns `sslmode=require` in the URI into
+  // `ssl: {}` — an EMPTY object that silently replaces the explicit ssl below,
+  // re-enabling full chain verification and re-rejecting the Timescale
+  // self-signed root. Strip every ssl-related query key so the explicit ssl
+  // object is the ONLY ssl config node-pg ever sees.
+  let cleaned = url;
+  try {
+    const u = new URL(url);
+    for (const key of [
+      "sslmode", "ssl", "sslcert", "sslkey", "sslpassword", "sslrootcert", "sslcrl",
+      "sslcrldir", "sslcompression", "sslsni", "ssl_min_protocol_version",
+      "ssl_max_protocol_version", "uselibpqcompat", "sslnegotiation",
+    ]) {
+      u.searchParams.delete(key);
+    }
+    cleaned = u.toString();
+  } catch {
+    // Not a parseable URL — pass through; pg surfaces its own connect error.
+  }
+  return { connectionString: cleaned, ssl: tigerSsl() };
 }
 
 export interface TigerStatusEvent {

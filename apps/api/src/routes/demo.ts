@@ -71,37 +71,44 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
     const secret = config.photonWebhookSigningSecret;
     const runtime = deps.inbound;
     const now = Date.now();
-    // Drive the EXACT real webhook path per text: envelope -> server-side HMAC ->
-    // the runtime's own verify (the same verifyPhotonSignature a forged request
-    // must pass) -> accept (id-guarded queue) -> drain (state HAS advanced).
-    for (const text of texts as string[]) {
-      const ts = Math.floor(now / 1000);
-      const raw = JSON.stringify(photonEnvelope(phone!, platform!, text));
-      const signature = secret
-        ? "v0=" + createHmac("sha256", secret).update(`v0:${ts}:${raw}`).digest("hex")
-        : null;
-      if (runtime.verify(raw, { signature: signature ?? undefined, timestamp: String(ts) }, now) !== "ok") {
-        // Honest failure: without PHOTON_WEBHOOK_SIGNING_SECRET the demo cannot sign.
-        return c.json({ error: "demo signup requires PHOTON_WEBHOOK_SIGNING_SECRET to sign the envelope" }, 503);
+    try {
+      // Drive the EXACT real webhook path per text: envelope -> server-side HMAC ->
+      // the runtime's own verify (the same verifyPhotonSignature a forged request
+      // must pass) -> accept (id-guarded queue) -> drain (state HAS advanced).
+      for (const text of texts as string[]) {
+        const ts = Math.floor(now / 1000);
+        const raw = JSON.stringify(photonEnvelope(phone!, platform!, text));
+        const signature = secret
+          ? "v0=" + createHmac("sha256", secret).update(`v0:${ts}:${raw}`).digest("hex")
+          : null;
+        if (runtime.verify(raw, { signature: signature ?? undefined, timestamp: String(ts) }, now) !== "ok") {
+          // Honest failure: without PHOTON_WEBHOOK_SIGNING_SECRET the demo cannot sign.
+          return c.json({ error: "demo signup requires PHOTON_WEBHOOK_SIGNING_SECRET to sign the envelope" }, 503);
+        }
+        const { enqueued } = runtime.accept(raw);
+        if (!enqueued) return c.json({ error: "envelope was not processable (malformed demo text)" }, 503);
       }
-      const { enqueued } = runtime.accept(raw);
-      if (!enqueued) return c.json({ error: "envelope was not processable (malformed demo text)" }, 503);
-    }
-    await runtime.drain();
+      await runtime.drain();
 
-    const user = await (await deps.deliver()).getUserByPhone(phone!);
-    if (!user) return c.json({ error: "the signup texts did not create a user" }, 503);
-    // byPhone-equivalent: the same brief builder /tools/brief/byPhone serves.
-    const brief = user.loc ? await buildUserBrief(await deps.match(), { id: user.id, lang: user.lang, loc: user.loc }, Date.now()) : null;
-    // Privacy: the phone is NEVER echoed or logged — the reply keys on userId only.
-    return c.json({
-      ok: true,
-      userId: user.id,
-      state: user.state,
-      lang: user.lang,
-      brief,
-      mapLink: `${config.publicBaseUrl}/b/${user.id}`,
-    });
+      const user = await (await deps.deliver()).getUserByPhone(phone!);
+      if (!user) return c.json({ error: "the signup texts did not create a user" }, 503);
+      // byPhone-equivalent: the same brief builder /tools/brief/byPhone serves.
+      const brief = user.loc ? await buildUserBrief(await deps.match(), { id: user.id, lang: user.lang, loc: user.loc }, Date.now()) : null;
+      // Privacy: the phone is NEVER echoed or logged — the reply keys on userId only.
+      return c.json({
+        ok: true,
+        userId: user.id,
+        state: user.state,
+        lang: user.lang,
+        brief,
+        mapLink: `${config.publicBaseUrl}/b/${user.id}`,
+      });
+    } catch (err) {
+      // NoMongoError / a store outage must never crash the handler (Hono would 500):
+      // degraded demo surface = an honest 503, never a faked signup.
+      console.error("demo/signup failed:", err instanceof Error ? err.message : err);
+      return c.json({ error: "demo signup unavailable (backend store is down)" }, 503);
+    }
   });
 
   app.post("/area-brief", async (c) => {
@@ -117,14 +124,19 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
     // The area brief for a NO-signup phone (Home fallback): the point-based brief —
     // the same builder + validator semantics the per-user pipeline uses; an
     // unvalidated shelter is simply absent (shelter null = the honest "unknown").
-    const brief = await buildUserBrief(
-      await deps.match(),
-      { id: "demo-area", lang: "en", loc: { type: "Point", coordinates: [lon, lat] } },
-      Date.now(),
-    );
-    // The phone (may be non-English) re-renders i18n client-side; the backend's own
-    // validator applies per-brief-language rules when this feeds chat.
-    return c.json({ ok: true, lang: "en", brief });
+    try {
+      const brief = await buildUserBrief(
+        await deps.match(),
+        { id: "demo-area", lang: "en", loc: { type: "Point", coordinates: [lon, lat] } },
+        Date.now(),
+      );
+      // The phone (may be non-English) re-renders i18n client-side; the backend's own
+      // validator applies per-brief-language rules when this feeds chat.
+      return c.json({ ok: true, lang: "en", brief });
+    } catch (err) {
+      console.error("demo/area-brief failed:", err instanceof Error ? err.message : err);
+      return c.json({ error: "area brief unavailable (backend store is down)" }, 503);
+    }
   });
 
   /**
@@ -142,13 +154,18 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
     if (platformRaw !== undefined && platformRaw !== "sms" && platformRaw !== "imessage") {
       return c.json({ error: "platform must be sms or imessage" }, 400);
     }
-    const user = (await (await deps.deliver()).getUserByPhone(phone)) as Pick<UserRecord, "id" | "state" | "lang" | "loc" | "platform"> | null;
-    if (!user || (platformRaw !== undefined && user.platform !== platformRaw)) {
-      // No user id/phone in the body — an honest fixed sentence (no signups happened / wrong platform).
-      return c.json({ error: "no Skywatch account for this phone (text the Skywatch number from that phone first; signup is SMS-verified)" }, 404);
+    try {
+      const user = (await (await deps.deliver()).getUserByPhone(phone)) as Pick<UserRecord, "id" | "state" | "lang" | "loc" | "platform"> | null;
+      if (!user || (platformRaw !== undefined && user.platform !== platformRaw)) {
+        // No user id/phone in the body — an honest fixed sentence (no signups happened / wrong platform).
+        return c.json({ error: "no Skywatch account for this phone (text the Skywatch number from that phone first; signup is SMS-verified)" }, 404);
+      }
+      const brief = user.loc ? await buildUserBrief(await deps.match(), { id: user.id, lang: user.lang, loc: user.loc }, Date.now()) : null;
+      return c.json({ ok: true, userId: user.id, state: user.state, lang: user.lang, brief });
+    } catch (err) {
+      console.error("demo/brief failed:", err instanceof Error ? err.message : err);
+      return c.json({ error: "demo brief unavailable (backend store is down)" }, 503);
     }
-    const brief = user.loc ? await buildUserBrief(await deps.match(), { id: user.id, lang: user.lang, loc: user.loc }, Date.now()) : null;
-    return c.json({ ok: true, userId: user.id, state: user.state, lang: user.lang, brief });
   });
 
   return app;

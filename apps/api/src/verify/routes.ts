@@ -27,11 +27,23 @@ export function checkinToolRoutes(config: Config, deps: AppDeps): Hono {
   app.post("/checkin", async (c) => {
     if (denied(c.req.header())) return c.json({ error: "missing or wrong tool secret" }, 401);
     const body = await c.req.json<Partial<CheckinBody>>().catch(() => null);
-    if (!body || typeof body.resourceId !== "string" || body.resourceId.length === 0) {
-      return c.json({ error: "body must include resourceId (string)" }, 400);
+    if (!body || typeof body.resourceId !== "string" || body.resourceId.length === 0 || body.resourceId.length > 128) {
+      return c.json({ error: "body must include resourceId (string, 1..128 chars)" }, 400);
     }
     if (typeof body.status !== "string" || !(CHECKIN_STATUSES as readonly string[]).includes(body.status)) {
       return c.json({ error: `status must be one of: ${CHECKIN_STATUSES.join("|")}` }, 400);
+    }
+    // Size caps, same pattern as the rest of the codebase (mesh photo ids ≤128,
+    // demo texts ≤140×5): an unbounded check-in body must never reach the store.
+    // The persist path STILL truncates stored notes to 200 (verify/checkin.ts).
+    if (typeof body.notes === "string" && body.notes.length > 4000) {
+      return c.json({ error: "notes must be 4000 chars or fewer" }, 400);
+    }
+    if (body.userId !== undefined && body.userId !== null && (typeof body.userId !== "string" || body.userId.length === 0 || body.userId.length > 128)) {
+      return c.json({ error: "userId must be a string of 1..128 chars" }, 400);
+    }
+    if (body.capacity !== undefined && body.capacity !== null && (!Number.isFinite(Number(body.capacity)) || Number(body.capacity) > 1_000_000)) {
+      return c.json({ error: "capacity must be a finite number up to 1000000" }, 400);
     }
     try {
       const store = await deps.store(config);

@@ -150,8 +150,12 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
         confidenceSeries: rows.map((r) => ({ time: r.at, confidence: decayed(r.at) })),
       });
     } catch (err) {
-      console.error("status-history read failed:", err instanceof Error ? err.message : err);
-      return c.json({ configured: true, error: "Tiger Data read failed (the chart stays absent, never fake)" }, 503);
+      // Diagnosable failure (tool-secret-gated route): the pg message (TLS,
+      // timeout, missing relation...) reveals nothing sensitive and is the ONLY
+      // signal the ops panel has — a blanket 503 hid the deployed TLS bug.
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error("status-history read failed:", reason);
+      return c.json({ configured: true, error: "Tiger Data read failed (the chart stays absent, never fake)", reason }, 503);
     }
   });
 
