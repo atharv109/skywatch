@@ -8,7 +8,7 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v10";
+const CACHE_VERSION = "sw-v11";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys

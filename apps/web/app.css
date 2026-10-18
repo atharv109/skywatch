@@ -575,6 +575,21 @@ svg { flex: none; stroke-linecap: round; stroke-linejoin: round; }
 .brand-logo { width: 96px; height: auto; display: block; margin: 2px auto 6px; border-radius: 14px; }
 .brand-mark { width: 26px; height: 26px; border-radius: 7px; flex: none; object-fit: cover; }
 
+/* carried route steps (bundle.routes) in the pin detail sheet */
+.route-card {
+  margin-top: 10px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.route-card.route-open { animation: routeOpen 0.35s var(--ease); }
+@keyframes routeOpen { from { opacity: 0; transform: translateY(8px); } }
+.step-row { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; color: var(--text); }
+.step-row:last-of-type { border-bottom: none; }
+.step-row .n { font-family: var(--mono); font-size: 11px; color: var(--accent); border: 1px solid var(--line); border-radius: 7px; padding: 2px 6px; margin-top: 1px; flex: none; }
+.step-row .t b { font-family: var(--mono); font-weight: 600; color: var(--accent); }
+.route-toggle { min-height: 30px; }
+.route-toggle[aria-expanded="true"] { background: var(--accent-dim); color: var(--accent); border-color: rgba(249, 115, 22, 0.35); }
+
 /* map attribution — tiny, dim, bottom-left of the map HUD */
 .map-attr {
   position: absolute; left: 14px; bottom: 106px; z-index: 3; pointer-events: none;

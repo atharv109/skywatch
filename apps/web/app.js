@@ -90,6 +90,7 @@
     loc: "skywatch.loc",          // { lat, lon, label }
     photos: "skywatch.photos",    // pending photo uploads keyed by photoRef { data, label }
     sat: "skywatch.satellite",    // last downlink satellite overlay { plumes, alerts, aqi, fetchedAt }
+    routes: "skywatch.routes",    // last downlink routes { routes: [{geometry,steps,dest…}], at }
   };
 
   function lsGet(key, fallback) {
@@ -107,6 +108,7 @@
     state.thread = lsGet(LS.thread, []);
     state.flags = lsGet(LS.flags, {});
     state.loc = lsGet(LS.loc, null);
+    state.routes = lsGet(LS.routes, null); // dark phones keep the last carried route
   }
   const persist = {
     profile() { lsSet(LS.profile, state.profile); },
@@ -127,6 +129,7 @@
     brief: null, mapState: null, meshState: null,
     syncState: null,           // last POST /mesh/sync outcome + at
     bundle: null,              // last downlink bundle
+    routes: null,              // last route pack (/demo routes[] via the mesh — walked offline too)
     areaBrief: null,           // /demo/area-brief fallback { data, at } — Home's no-signup brief
     areaNote: null,            // "off" once /demo/area-brief proved absent on this server
     tab: "home",
@@ -598,6 +601,10 @@
     failReset("mesh");
     state.meshState = result.json;
     cacheData("mesh", result.json);
+    const meshRoutes = Array.isArray(result.json.routes) && result.json.routes.length
+      ? result.json.routes
+      : (result.json.bundle && Array.isArray(result.json.bundle.routes) ? result.json.bundle.routes : null);
+    if (meshRoutes) { state.routes = { routes: meshRoutes, at: Date.now() }; lsSet(LS.routes, state.routes); }
     renderMeshBadge();
     // a fresh mesh state re-renders the open Mesh surface in place (drafts kept; focus only if it was in the box)
     if (state.tab === "mesh") {
@@ -1122,6 +1129,10 @@
       state.bundle = result.json.bundle;
       if (result.json.bundle && result.json.bundle.satellite) {
         lsSet(LS.sat, result.json.bundle.satellite); // dark phones keep the last overlay after rebroadcast
+      }
+      if (result.json.bundle && Array.isArray(result.json.bundle.routes) && result.json.bundle.routes.length) {
+        state.routes = { routes: result.json.bundle.routes, at: Date.now() }; // walked routes ride the bundle down
+        lsSet(LS.routes, state.routes);
       }
       persist.queue();
       renderMeshBadge();
@@ -1889,10 +1900,35 @@
     return drawn > 0;
   }
 
-  /* selected-pin route: an animated glowing orange path (visual, not navigation) */
+  /* selected-pin route: a REAL carried route polyline when the mesh brought
+   * one down for this pin, else the approximate glowing orange path (visual,
+   * still useful without any data). */
   function drawRouteLine(p, t) {
     if (!routeTo) return;
     const me = myLoc();
+    const carried = routeForResource(routeTo, me);
+    if (carried) {
+      const pts = routeLinePts(carried, me, p); // me + geometry, screen coords
+      if (pts.length >= 2) {
+        ctx.save();
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.shadowColor = "rgba(249,115,22,0.85)";
+        ctx.shadowBlur = 14;
+        ctx.strokeStyle = "rgba(249,115,22,0.22)";
+        ctx.lineWidth = 9;
+        ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.stroke();
+        ctx.shadowBlur = 7;
+        ctx.strokeStyle = "#F97316";
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.stroke();
+        ctx.restore();
+        return;
+      }
+    }
     const x1 = p.x(me.lon), y1 = p.y(me.lat);
     const x2 = p.x(routeTo.lon), y2 = p.y(routeTo.lat);
     const ddx = x2 - x1, ddy = y2 - y1;
@@ -1916,6 +1952,72 @@
     ctx.lineDashOffset = -(t / 30) % 22;
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cxp, cyp, x2, y2); ctx.stroke();
     ctx.restore();
+  }
+
+  /* ---- carried routes (bundle.routes / mesh-state routes) ---- */
+
+  /** {lat,lon} of a route's destination: dest{lat/lon|coords} or the geometry's last point. */
+  function routeDest(r) {
+    if (r && r.dest) {
+      if (typeof r.dest.lat === "number" && typeof r.dest.lon === "number") return { lat: r.dest.lat, lon: r.dest.lon };
+      if (Array.isArray(r.dest.coords) && r.dest.coords.length >= 2) return { lat: r.dest.coords[1], lon: r.dest.coords[0] };
+    }
+    const g = r && r.geometry;
+    if (g && g.type === "LineString" && Array.isArray(g.coordinates) && g.coordinates.length) {
+      const last = g.coordinates[g.coordinates.length - 1];
+      return { lat: last[1], lon: last[0] };
+    }
+    return null;
+  }
+
+  /** the carried route that targets THIS pin: dest within 200 m, or — for the
+   * verified-open shelter — the single bundled route (fixture fallback). */
+  function routeForResource(res, me) {
+    const rs = (state.routes && state.routes.routes) || [];
+    let best = null, bestD = Infinity;
+    for (const r of rs) {
+      const d = routeDest(r);
+      if (!d) continue;
+      const dist = haversineKm(d, res);
+      if (dist < bestD) { bestD = dist; best = r; }
+    }
+    if (best && bestD * 1000 <= 200) return best;
+    if (res.kind === "shelter" && res.status === "open" && (res.confidence || 0) >= 0.5 && rs.length === 1) return rs[0];
+    return null;
+  }
+
+  /** walkable screen points for a carried route: the user dot + the geometry. */
+  function routeLinePts(route, me, p) {
+    const g = route.geometry;
+    if (!g || g.type !== "LineString" || !Array.isArray(g.coordinates)) return [];
+    const pts = [[p.x(me.lon), p.y(me.lat)]];
+    for (const c of g.coordinates) {
+      if (Array.isArray(c) && c.length >= 2) pts.push([p.x(c[0]), p.y(c[1])]);
+    }
+    return pts;
+  }
+
+  /** steps list html for the sheet ("From you: 240 m — Yesler Way / …"). */
+  function routeStepsHtml(route, res) {
+    const km = route.distanceKm != null ? Number(route.distanceKm) : null;
+    const min = route.durationMin != null ? Number(route.durationMin) : null;
+    const head = (km != null || min != null)
+      ? `<button class="chip chip-n route-toggle" id="stepsToggle" aria-expanded="false">${ICONS.sync} Route to ${esc(res.name.split(" ")[0])}${km != null ? " · " + esc(km.toFixed(2)) + " km" : ""}${min != null ? " · ~" + esc(String(Math.round(min))) + " min walk" : ""}</button>`
+      : `<button class="chip chip-n route-toggle" id="stepsToggle" aria-expanded="false">${ICONS.sync} Route steps</button>`;
+    const rows = (route.steps || []).map((s, i) => {
+      const m = s && s.distanceM != null ? Number(s.distanceM) : null;
+      const distLine = m != null ? (m >= 1000 ? (m / 1000).toFixed(1) + " km" : Math.round(m) + " m") : "";
+      return `<div class="step-row"><span class="n">${i + 1}</span><span class="t">${distLine ? "<b>" + esc(distLine) + "</b> — " : ""}${esc((s && s.text) || "")}</span></div>`;
+    }).join("") || '<p class="mini dim">No turn-by-turn steps in this route pack.</p>';
+    const when = fmtFetchedAt(route != null && route.fetchedAt != null ? route.fetchedAt : (route && state.routes && state.routes.at));
+    const live = route && route.source === "fixture"
+      ? `<span class="chip chip-warn">prepared route</span>`
+      : (when ? `route fetched live at ${esc(when)} · carried by the mesh` : "carried by the mesh");
+    return `${head}
+      <div class="route-card" id="stepsList" hidden>
+        ${rows}
+        <p class="mini dim" style="margin-top:8px">${live}</p>
+      </div>`;
   }
 
   /* ---- brand pins: 44px white circle + dark kind glyph + status chip ---- */
@@ -2216,6 +2318,7 @@
     const conf = Math.round((r.confidence || 0) * 100);
     const dist = haversineKm(myLoc(), r);
     const verified = r.status === "open" && conf >= 50;
+    const carried = routeForResource(r);
     openSheet(`
       <div class="pin-head">
         <span class="pin-glyph${r.partner ? " partner" : ""}">${kindGlyphSvg(r.kind)}</span>
@@ -2231,9 +2334,21 @@
         <span class="chip chip-n chip-mono">${esc(r.kind)}</span>
       </div>
       ${r.hours ? `<p class="pin-hours">${esc(r.hours)}</p>` : `<p class="pin-hours dim">No posted hours — the status above is the freshest check-in.</p>`}
-      <a class="btn btn-cta btn-block" style="margin-top:14px" href="${esc(directionsUrl(r.lat, r.lon, r.name))}" target="_blank" rel="noopener">${ICONS.pin} Directions</a>
-      <p class="mini dim2" style="margin-top:10px;text-align:center">Route line is a demo guide — not turn-by-turn navigation.</p>
-    `, null, "sheet-detail");
+      ${carried ? routeStepsHtml(carried, r) : ""}
+      <a class="btn btn-cta btn-block" style="margin-top:14px" href="${esc(directionsUrl(r.lat, r.lon, r.name))}" target="_blank" rel="noopener">${ICONS.pin} Open in Maps (needs signal)</a>
+      <p class="mini dim2" style="margin-top:10px;text-align:center">${carried ? "The orange line is the carried route — followable offline." : "Route line is an approximate guide — not turn-by-turn navigation."}</p>
+    `, (sheet) => {
+      const toggle = $("#stepsToggle", sheet), list = $("#stepsList", sheet);
+      if (toggle && list) toggle.addEventListener("click", () => {
+        haptic(5);
+        list.hidden = !list.hidden;
+        toggle.setAttribute("aria-expanded", String(!list.hidden));
+        if (!list.hidden) {
+          list.classList.remove("route-open"); void list.offsetWidth; list.classList.add("route-open");
+          list.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "nearest" });
+        }
+      });
+    }, "sheet-detail");
   }
 
   function haversineKm(a, b) {
@@ -3140,7 +3255,7 @@
     startPolling();
     startHealthRetry(); // queued packets from a past session drain even without a mode transition
     // debug hook (harmless; also lets the lead inspect live state from the console)
-    window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway, directionsUrl };
+    window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway, directionsUrl, proj, routeForResource, routeLinePts, routeStepsHtml };
 
     /* Native BLE transport seam — runs ONLY in the Capacitor native build, where
      * apps/native/sync-web.mjs injects window.SKYWATCH_NATIVE and loads native-ble.js.
