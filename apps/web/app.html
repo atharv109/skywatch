@@ -24,6 +24,19 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js", { scope: "./" }).catch(() => {
       /* not https / private mode — app still works, just uncached */
     });
+    // a new build activates as soon as it installs (skipWaiting + claim) —
+    // reload once so the running page swaps to it without a second cold open
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      try {
+        if (sessionStorage.getItem("swReloaded")) return;
+        sessionStorage.setItem("swReloaded", "1");
+        location.reload();
+      } catch (_e) { /* private mode — just reload once */ location.reload(); }
+    });
+    // periodic SW update check while the app is open
+    setInterval(() => {
+      navigator.serviceWorker.getRegistration().then((r) => { if (r) r.update(); }).catch(() => {});
+    }, 30 * 60000);
   });
 }
 </script>

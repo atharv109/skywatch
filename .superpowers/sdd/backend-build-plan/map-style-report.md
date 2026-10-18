@@ -81,3 +81,11 @@ Finding #5: a valid account's number ("4258329409") posted raw and got a false 4
 - Initial fit zoom was retuned (`0.09°` min-span floor → `0.02°`; zoom clamp 0.3–2.8 + fit cap 2.6) so the demo cluster fills the screen inside the packed tile scale — that's map-rendering scope, not data/behavior.
 - At tile scales finer than z14 the pack upscales ~1.4× (soft). Fine for the reference look; a z15 ring around downtown would sharpen it if wanted later.
 - While iterating I killed all `node.exe` processes once (taskkill) to restart the conversion server — if anything else node-based was running on this box at 23:37, that's why it stopped.
+
+## Follow-up 6 — say-hi dead button (ROOT CAUSE: a real JS bug, not stale SW) + update flow & build chip
+
+Headless repro (390×844, touch emulated, cold context) DID reproduce: tapping "Say hi and continue" threw `TypeError: Cannot read properties of undefined (reading 'push') at obSend` — `startOnboarding()` mints `state.ob = { step, obQueue, … }` WITHOUT the `texts` field that the new round-trip collector assumed, so the first tap died before `threadPush`. One-line fix (`state.ob.texts = state.ob.texts || []`). Fixed-and-verified: tap → thread gains "hi" + bot welcome → step 1 ("Where should we watch?") renders with scrollTop 0; the FULL walkthrough (hi → address+lang → consent → finish) passes with the single `POST /demo/signup {phone:"…", platform:"sms", texts:["hi","101 Yesler Way, Seattle","english"]}` and the brief landing on Home.
+
+Stale-SW hardening added anyway (finding #5 showed the phone can trail the repo): an app-shell `controllerchange` → one session-scoped `location.reload()` (fresh builds activate immediately with skipWaiting/clients.claim — already in the SW), a 30-min `registration.update()` check, and a **Profile → "app build" chip** reading the live shell's CACHE_VERSION through the running service worker (`sw-v8`) so on-device builds are visible at a glance (first version mis-grepped its own code line — anchored regex; second pass fetched the wrong file — both caught by the same smoke, chip now returns `sw-v8`).
+
+SW `CACHE_VERSION` → `sw-v8`; pushed.

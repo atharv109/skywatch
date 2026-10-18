@@ -805,6 +805,7 @@
     // demo round-trip: no per-text webhook POSTs from the browser — the texts
     // are collected here and go out in ONE /demo/signup POST at finish.
     state.ob = state.ob || { texts: [] };
+    state.ob.texts = state.ob.texts || []; // startOnboarding's ob object predates the texts field
     state.ob.texts.push(text);
     threadPush("user", text, state.mode === "online" ? "ob" : "queued");
     if (state.mode !== "online") {
@@ -2670,6 +2671,7 @@
           <div class="kv"><span class="k">key</span><span class="v">${id ? (id.legacy ? "unsigned (legacy)" : "Ed25519 · WebCrypto") : "…"}</span></div>
           <div class="kv"><span class="k">platform</span><span class="v">${esc((state.profile.platform || "sms").toUpperCase())}</span></div>
           <div class="kv"><span class="k">number</span><span class="v">${esc(maskPhone(state.profile.phone) || "—")}</span></div>
+          <div class="kv"><span class="k">app build</span><span class="v" id="appBuild">…</span></div>
           <div class="kv"><span class="k">language</span><span class="v">${esc(LANG_NAMES[state.profile.lang] || "English")}</span></div>
           <div class="kv"><span class="k">reporting from</span><span class="v">${esc(myLoc().label)}${esc(locAcc())}</span></div>
           <button class="btn btn-ghost btn-block" id="locBtn" style="margin-top:10px;min-height:42px">Use my real location</button>
@@ -2734,6 +2736,14 @@
     $("#simCallBtn", el).addEventListener("click", () => startCall());
     $("#cfgBtn", el).addEventListener("click", openConfigModal);
     $("#locBtn", el).addEventListener("click", askGeolocate);
+
+    // App build chip — shows the SW build the phone actually runs (fetched
+    // through the service worker, so it's the shell that's live, on-device)
+    fetch("sw.js").then((r) => r.text()).then((t) => {
+      const m = String(t).match(/^const CACHE_VERSION = "([^"]+)"/m);
+      const v = $("#appBuild", el);
+      if (v) v.textContent = m ? m[1] : "?";
+    }).catch(() => { const v = $("#appBuild", el); if (v) v.textContent = "?"; });
 
     // one fresh measurement for the Connection card while it's on screen
     void probeHealth().then(() => {
