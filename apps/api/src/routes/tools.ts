@@ -29,8 +29,12 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
   // exact accepted header forms live in src/tools/auth.ts).
   const deniedFor = (headers: Record<string, string | undefined>) => toolSecretDenied(config, headers);
 
-  async function briefForUser(user: UserRecord | null, platform?: string): Promise<{ brief?: unknown; missing?: string }> {
-    if (!user || (platform !== undefined && user.platform !== platform)) return { missing: "unknown user" };
+  async function briefForUser(user: UserRecord | null): Promise<{ brief?: unknown; missing?: string }> {
+    // Task 8-urgent ruling: the PHONE is the identity — the platform is only the
+    // delivery-channel preference, so the byPhone lookup filters by phone ONLY
+    // (never by platform): a user signed up on the Photon iMessage line must brief
+    // through the sms-segment URL too (live-proven: the judge's brief caller).
+    if (!user) return { missing: "unknown user" };
     if (!user.loc) return { missing: "user has no resolved location" };
     const match = await deps.match();
     const brief = await buildUserBrief(match, { id: user.id, lang: user.lang, loc: user.loc }, Date.now());
@@ -39,14 +43,17 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
 
   app.get("/brief/byPhone/:platform/:phone", async (c) => {
     if (deniedFor(c.req.header())) return c.json({ error: "missing or wrong tool secret" }, 401);
-    const platform = c.req.param("platform");
+    // The :platform segment is URL-COMPAT only (the ElevenLabs agent tool config
+    // keeps its shape); spelling doesn't matter ('iMessage'/'SMS' pass) — the
+    // lookup is by phone. Truly unknown segments still 404 (honest garbage guard).
+    const platform = c.req.param("platform").toLowerCase();
     if (platform !== "imessage" && platform !== "sms") {
       return c.json({ error: "unknown platform (use imessage|sms)" }, 404);
     }
     try {
       const deliver = await deps.deliver();
       const user = await deliver.getUserByPhone(c.req.param("phone"));
-      const result = await briefForUser(user, platform);
+      const result = await briefForUser(user);
       if (result.missing) return c.json({ error: result.missing }, 404);
       return c.json(result.brief);
     } catch (err) {

@@ -198,8 +198,14 @@ describe("GET /tools/brief/:userId + /tools/brief/byPhone/:platform/:phone", () 
     await h.dstore.createUser(userDoc());
 
     expect((await briefReq(h.app, "/tools/brief/byPhone/sms/unknown-phone-555")).status).toBe(404);
-    // wrong platform on an existing user
-    expect((await briefReq(h.app, "/tools/brief/byPhone/imessage/+15551239999")).status).toBe(404);
+    // Task 8-urgent ruling (live-proven): the PHONE is the identity — a user signed
+    // up on the Photon iMessage line briefs through the sms-segment URL too.
+    const imUser = await h.dstore.createUser({ ...userDoc(), phone: "+15551233199", platform: "imessage" });
+    const crossPlatform = await briefReq(h.app, "/tools/brief/byPhone/sms/%2B15551233199");
+    expect(crossPlatform.status).toBe(200);
+    expect(((await crossPlatform.json()) as UserBrief).userId).toBe(imUser.id);
+    // spelling of the segment doesn't matter ('iMessage'/'SMS' pass);
+    expect((await briefReq(h.app, "/tools/brief/byPhone/iMessage/%2B15551233199")).status).toBe(200);
     // unknown platform segment
     expect((await briefReq(h.app, "/tools/brief/byPhone/telegram/+15551239999")).status).toBe(404);
     // known id but incomplete signup (no loc)
