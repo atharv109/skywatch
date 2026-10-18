@@ -18,6 +18,8 @@
  * online/offline events + a ~5 s /health liveness loop while dark drive the
  * transitions (OFFLINE + signal → auto-Gateway sync → /health OK → ONLINE);
  * a manual Profile pick sets netOverride and overrides the detector while set.
+ * The same liveness tick drains queued mesh traffic while ONLINE (online + a
+ * non-empty queue = you are the gateway), so nothing sits queued above a 5G bar.
  * Queued packets sign via WebCrypto Ed25519 exactly
  * per src/mesh/sig.ts: msg = `id|type|ts|lat|lon|deviceId`, base64 raw key+sig,
  * TOFU pinning; deviceId = 10-hex sha256 prefix of the RAW pubkey (per-session
@@ -200,7 +202,7 @@
     phoneEl.dataset.mode = mode;
     renderAll();
     if (mode === "gateway") void safe(syncGateway()).then(renderMesh);
-    if (mode === "offline" || mode === "gateway") startHealthRetry();
+    startHealthRetry(); // runs in every mode — liveness/offline flip + ONLINE queue drain
   }
 
   /* AUTO detection — one state machine drives the status bar: window
@@ -222,6 +224,21 @@
         if (liveStreak >= 2 && isAutoNet()) autoToGateway();
       } else if (state.mode === "gateway") {
         if (res && !gwInFlight) autoToOnline();
+      } else if (res && !gwInFlight) {
+        // ONLINE drain: queued mesh traffic means you're carrying the mesh —
+        // one silent gateway sync per tick until the queue empties.
+        const pending = state.queue.filter((p) => p.state === "queued" || p.state === "fail");
+        if (!pending.length) return;
+        const out = await safe(() => syncGateway({ silent: true }));
+        if (out) {
+          flashStatusChip("synced — " + (out.received != null ? out.received : pending.length) + " sent", "ok");
+          if (state.tab === "mesh") {
+            const draft = $("#meshText") ? $("#meshText").value : ""; // keep a half-typed draft
+            renderMesh();
+            const ta = $("#meshText");
+            if (ta && draft) { ta.value = draft; $("#meshCount").textContent = String(280 - draft.length); }
+          }
+        }
       }
     }, 5000);
   }
@@ -2089,6 +2106,7 @@
     else { void safe(resyncAll(true)); }
 
     startPolling();
+    startHealthRetry(); // queued packets from a past session drain even without a mode transition
     // debug hook (harmless; also lets the lead inspect live state from the console)
     window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway };
   }
