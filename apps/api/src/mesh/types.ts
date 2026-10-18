@@ -76,7 +76,7 @@ export interface SatelliteSection {
 
 /**
  * Task 10: offline directions to the bundle's verified-open shelter. A FACT (no
- * validator) with the honesty badges: fetchedAt + source ("osrm" = fetched live at
+ * validator) with the honesty badges: fetchedAt + source ("live" = fetched live at
  * this sync; "fixture" = the COMMITTED prepared pack — demo-gated, never presented
  * as live). Coordinates are [lat, lon] (sampled ≤120 vertices); ≤12 phrase steps.
  */
@@ -90,7 +90,8 @@ export interface MeshRouteView {
   durationMin: number;
   steps: Array<{ distanceM: number; name: string; instruction: string }>;
   fetchedAt: number;
-  source: "osrm" | "fixture";
+  /** "live" = OSRM fetched at this sync; "fixture" = the committed prepared pack (demo-gated). LOCKED to the app's routes[] consumer enum. */
+  source: "live" | "fixture";
 }
 
 /** Canonical normalized rescue kinds (the packet's raw `status` is normalized at the door). */

@@ -2,7 +2,7 @@
  * Task 10 — offline walking/driving directions via the public OSRM demo server,
  * fetched at gateway sync (the "when one node gets signal" window) when the
  * gateway's area has a VERIFIED-OPEN shelter. The route is a FACT — no validator —
- * but the honesty badges ride along: fetchedAt + the `source` ("osrm" live / "fixture"
+ * but the honesty badges ride along: fetchedAt + the `source` ("live" = OSRM) / "fixture"
  * = the committed prepared pack, served ONLY under the DEMO_SIGNUP gate, never
  * presented as live). Failure ⇒ null/omitted key — the same all-or-nothing posture
  * as the satellite section (the app falls back to its glow line; nothing blocks and

@@ -50,7 +50,7 @@ function makeDirectionsFetcher(
       const profile = profileFor(nearest.distanceKm > 0 ? nearest.distanceKm : osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon }));
       const fetched = await fetchRoute({ lat, lon }, { lat: to.lat, lon: to.lon }, profile, injFetcher);
       if (fetched) {
-        route = { ...fetched, from: { lat, lon }, to, profile, fetchedAt: now, source: "osrm" };
+        route = { ...fetched, from: { lat, lon }, to, profile, fetchedAt: now, source: "live" };
       }
     }
     if (!route && config.demoSignup) {
