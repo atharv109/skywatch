@@ -67,3 +67,19 @@
 4. **Capacity can never appear in a chat/alert reply:** the Task 5 validator still rejects capacity-like claims (the locked brief has no capacity field) — capacity is only visible on the map/dashboard resource surface. Intended, but worth knowing: an agent asked "how many beds?" gets the fallback wording.
 5. **Chat cap overflow behavior:** when the model spends all 4 rounds on tool calls, the final no-tool round's output is validated; if even that fails, the reply is the fallback composition (with `toolsUsed` preserved so the transcript stays explainable).
 6. Untracked `apps/api/.env.example` (Task 4 review leftover) predates this task; left alone — root `.env.example` already covers `TOOL_SECRET`.
+---
+
+## Fix round 1 (commits a8132e9..4502491) — completed by controller
+
+Provenance: the original fix implementer was terminated mid-round by an API rate-limit error after completing C1 and I1; the controller finished I3 and added one discovery, and took responsibility for verification. All work in one commit: 4502491.
+
+- C1 (critical, _id in $set): FIXED — mongoUpsertCol destructures _id out (`store.ts:29-31`), getResource/getRoad project `{_id: 0}` (`store.ts:62-77`), verify re-arm destructures _id (`verify/store.ts:52-56`).
+- I1 (hourly cap): FIXED — `MAX_CHECKINS_PER_RESOURCE_PER_HOUR = 3` (run.ts:50), enforced via `countAnsweredSince` in createVerifyRuns; re-arm additionally bounded by VERIFY_REARM_HOUR_MS in both stores (memory + mongo parity).
+- I3 (call_initiation_failure): FIXED — routable in voice_runtime (routable types: transcription w/ outcome + call_initiation_failure); processCallFailure records answered `no-answer:<reason>` (fail reason from data.failure_reason or sip.body.error_reason, capped 100 chars) and releases the dispatched latch; conversation note when user_id maps to a user; ack behavior unchanged (200 fast, fail-closed HMAC untouched).
+- Controller-added during verification: `$geoNear` with `limit: 1` parameter throws `MongoServerError: $geoNear no longer supports the 'limit' parameter` on the local mongod (and would on current Atlas). Shelter-nearest query switched to `.limit(1)` stage (`match/store.ts:72`). This was an invisible-on-hermetic deployed-stack bug of the same class as C1, pre-existing since Task 4.
+
+Verification commands + outputs:
+- `npx tsc --noEmit -p apps/api` → clean.
+- `MONGODB_URI="mongodb://127.0.0.1:27017/skywatch-fixrun" npx vitest run` → **156 passed / 156 (15 files)** — including the previously-skipped gated real-Mongo blocks: boot indexes, spatial $geoIntersects/$geoNear over 2dsphere, and the new full round-trip (HTTP check-in + roads/check + verify run → poll → call_initiation_failure release, all against real Mongo).
+- `npx vitest run` (no URI) → 151 passed / 5 skipped — no hermetic regressions.
+- Note: two test-isolation fixes in checkin.test.ts (own-keys cleanup incl. stale vr: requests — the re-arm cap correctly blocks re-creation — and resourceId-based assertion instead of literal requestId, whose hazard segment depends on first-match hazard ordering in a shared local DB). These make the gated test re-runnable; the product semantics they exposed (re-arm cap, partner targeting) are intended behavior, asserted now by resourceId.
