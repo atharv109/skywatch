@@ -188,7 +188,7 @@ interface SyncBody {
     };
     routes?: Array<{
       from: { lat: number; lon: number };
-      to: { shelterId: string; name: string };
+      to: { shelterId: string; name: string; status?: string; confidence?: number; verified?: boolean };
       profile: string;
       coords: Array<[number, number]>;
       distanceKm: number;
@@ -1068,6 +1068,7 @@ describe("Task 10: offline directions via OSRM (facts, no validator)", () => {
     expect(route.source).toBe("fixture"); // prepared pack, never masquerading as live
     expect(route.to.shelterId).toBe("seed-shelter-1");
     expect(route.to.name).toBe("Test Shelter"); // the harness resource (sourceId overridden onto the pack id)
+    expect(route.to).toMatchObject({ status: "open", verified: true }); // fresh + open: badge-free
     expect(route.from).toEqual({ lat: 47.605, lon: -122.335 });
     expect(route.coords.length).toBeGreaterThan(1);
     expect(route.steps.length).toBeLessThanOrEqual(12);
@@ -1084,6 +1085,40 @@ describe("Task 10: offline directions via OSRM (facts, no validator)", () => {
     });
     const body2 = (await (await syncPackets(h2, GW, 47.6, -122.33, [packet(signer)])).json()) as SyncBody;
     expect(body2.bundle.routes).toBeUndefined();
+  });
+
+  it("routes cover the nearest shelters REGARDLESS of verification, each honestly badged — an unverified shelter is never 'open'", async () => {
+    const h = harness({
+      env: { DEMO_SIGNUP: "1" },
+      resources: [
+        shelter({ sourceId: "seed-shelter-1", name: "Stale Open", verifiedAt: NOW - 3 * 3_600_000, status: "open" }), // decayed: unknown
+        shelter({ sourceId: "seed-shelter-3", name: "Never Verified", verifiedAt: null, status: "unknown" }),
+        shelter({ sourceId: "seed-shelter-2", name: "Fresh Open", verifiedAt: NOW, status: "open" }),
+      ],
+    });
+    const body = (await (await syncPackets(h, GW, 47.605, -122.335, [packet(makeSigner("mesh-test-device-route-3"))])).json()) as SyncBody;
+    const routes = body.bundle.routes!;
+    expect(routes).toHaveLength(3); // capped at DIRECTIONS_MAX_ROUTES, none dropped for being unverified
+    const byId = Object.fromEntries(routes.map((r) => [r.to.shelterId, r.to]));
+    expect(byId["seed-shelter-1"]).toMatchObject({ status: "unknown", verified: false }); // open-but-decayed shows UNKNOWN
+    expect(byId["seed-shelter-1"]!.confidence).toBeLessThan(0.5);
+    expect(byId["seed-shelter-3"]).toMatchObject({ status: "unknown", verified: false });
+    expect(byId["seed-shelter-2"]).toMatchObject({ status: "open", verified: true });
+    // honesty invariant: no route claims open unless verified
+    for (const r of routes) expect(r.to.status === "open").toBe(r.to.verified === true);
+    // the bundle's own nearestVerifiedShelter (when present) can only ever be the verified one
+    if (body.bundle.nearestVerifiedShelter) expect(body.bundle.nearestVerifiedShelter.name).toBe("Fresh Open");
+  });
+
+  it("only-unverified area still gets routes while nearestVerifiedShelter stays null", async () => {
+    const h = harness({
+      env: { DEMO_SIGNUP: "1" },
+      resources: [shelter({ sourceId: "seed-shelter-1", verifiedAt: NOW - 5 * 3_600_000, status: "open" })],
+    });
+    const body = (await (await syncPackets(h, GW, 47.605, -122.335, [packet(makeSigner("mesh-test-device-route-4"))])).json()) as SyncBody;
+    expect(body.bundle.nearestVerifiedShelter).toBeNull();
+    expect(body.bundle.routes).toHaveLength(1);
+    expect(body.bundle.routes![0]!.to.verified).toBe(false);
   });
 
   it("knobs off (default): no routes key and NO network at all — hermetic determinism unchanged", async () => {

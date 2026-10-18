@@ -289,6 +289,7 @@
     stopHealthRetry();
     healthTimer = setInterval(async () => {
       if (state.netOverride === "offline") return; // manual "force demo offline" stays dark
+      if (window.SkyNav && window.SkyNav.active) return; // navigation is fully offline: no background network while it runs
       const res = await probeHealth();
       if (state.mode === "offline") {
         liveStreak = res ? liveStreak + 1 : 0;
@@ -626,6 +627,15 @@
       const ta = $("#meshText", screens.mesh);
       const draft = ta ? ta.value : "";
       const wasFocused = ta && document.activeElement === ta;
+      // the 2 s poll must not rebuild the screen unless something visible changed, and never mid-typing
+      // (a rebuild drops the phone keyboard and resets scroll)
+      const { generatedAt: _g, ...visible } = result.json;
+      const sig = JSON.stringify(visible);
+      const changed = sig !== state.meshSig;
+      state.meshSig = sig;
+      if (!changed && !state.meshDirty) return;
+      if (wasFocused || draft) { state.meshDirty = true; return; }
+      state.meshDirty = false;
       renderMesh();
       const ta2 = $("#meshText", screens.mesh);
       if (ta2 && draft) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); if (wasFocused) ta2.focus(); }
@@ -704,11 +714,11 @@
   }
   function startPolling() {
     stopPolling();
-    state.polls.tick = setInterval(() => { if (!document.hidden) pollOnce(); }, 12000);
+    state.polls.tick = setInterval(() => { if (!document.hidden && !(window.SkyNav && window.SkyNav.active)) pollOnce(); }, 12000);
     // fast mesh-state poll (2 s, online/gateway): a DM delivers the moment ANY
     // connectivity exists — no user action, no waiting on the slow brief cycle
     state.polls.mesh = setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || (window.SkyNav && window.SkyNav.active)) return; // nav mode: no background polling
       if (state.mode === "online" || state.mode === "gateway") void safe(fetchMeshState());
     }, 2000);
   }
@@ -2013,6 +2023,7 @@
 
   /** {lat,lon} of a route's destination: dest{lat/lon|coords} or the geometry's last point. */
   function routeDest(r) {
+    if (r && r.to && typeof r.to.lat === "number" && typeof r.to.lon === "number") return { lat: r.to.lat, lon: r.to.lon }; // wire shape (MeshRouteView)
     if (r && r.dest) {
       if (typeof r.dest.lat === "number" && typeof r.dest.lon === "number") return { lat: r.dest.lat, lon: r.dest.lon };
       if (Array.isArray(r.dest.coords) && r.dest.coords.length >= 2) return { lat: r.dest.coords[1], lon: r.dest.coords[0] };
@@ -2036,8 +2047,11 @@
       const dist = haversineKm(d, res);
       if (dist < bestD) { bestD = dist; best = r; }
     }
-    if (best && bestD * 1000 <= 200) return best;
-    if (res.kind === "shelter" && res.status === "open" && (res.confidence || 0) >= 0.5 && rs.length === 1) return rs[0];
+    // nav.js normalises the wire shape ({coords:[lat,lon], steps[].instruction, to}) into the
+    // geometry/steps[].text/dest shape every consumer below reads (memoised per route object)
+    const norm = (r) => (r && window.SkyNav && window.SkyNav.normalizeRoute ? window.SkyNav.normalizeRoute(r) : r);
+    if (best && bestD * 1000 <= 200) return norm(best);
+    if (res.kind === "shelter" && res.status === "open" && (res.confidence || 0) >= 0.5 && rs.length === 1) return norm(rs[0]);
     return null;
   }
 
@@ -2095,7 +2109,7 @@
   function hazardMarkersAll() {
     const out = [];
     const add = (o, kind) => {
-      if (o && typeof o.lat === "number" && typeof o.lon === "number") out.push({ lat: o.lat, lon: o.lon, kind, label: o.label || o.name || "" });
+      if (o && typeof o.lat === "number" && typeof o.lon === "number") out.push({ lat: o.lat, lon: o.lon, kind, label: o.label || o.name || "", ts: typeof o.ts === "number" ? o.ts : null, confidence: typeof o.confidence === "number" ? o.confidence : null });
     };
     try {
       const hm = state.hazardMarkers;
@@ -2164,7 +2178,7 @@
     const km = route.distanceKm != null ? Number(route.distanceKm) : null;
     const min = route.durationMin != null ? Number(route.durationMin) : null;
     const head = (km != null || min != null)
-      ? `<button class="chip chip-n route-toggle" id="stepsToggle" aria-expanded="false">${ICONS.sync} Route to ${esc(res.name.split(" ")[0])}${km != null ? " · " + esc(km.toFixed(2)) + " km" : ""}${min != null ? " · ~" + esc(String(Math.round(min))) + " min walk" : ""}</button>`
+      ? `<button class="chip chip-n route-toggle" id="stepsToggle" aria-expanded="false">${ICONS.sync} Route to ${esc(res.name.split(" ")[0])}${km != null ? " · " + esc(km.toFixed(2)) + " km" : ""}${min != null ? " · ~" + esc(String(Math.round(min))) + " min " + (route.profile === "driving" ? "drive" : "walk") : ""}</button>`
       : `<button class="chip chip-n route-toggle" id="stepsToggle" aria-expanded="false">${ICONS.sync} Route steps</button>`;
     const rows = (route.steps || []).map((s, i) => {
       const m = s && s.distanceM != null ? Number(s.distanceM) : null;
@@ -2584,6 +2598,8 @@
         <span class="chip chip-n chip-mono">${esc(r.kind)}</span>
       </div>
       ${r.hours ? `<p class="pin-hours">${esc(r.hours)}</p>` : `<p class="pin-hours dim">No posted hours — the status above is the freshest check-in.</p>`}
+      ${verified ? "" : '<p class="route-unverified" role="note"><b>Shelter not verified — confirm before going.</b> The status above is the freshest check-in, not a promise it is open.</p>'}
+      ${window.SkyNav ? `<button class="btn btn-primary btn-block nav-start" id="navStart" type="button">Start navigation${carried ? "" : " (straight-line guide)"}</button>` : ""}
       ${carried ? routeStepsHtml(carried, r) : ""}
       <div id="navLive" style="margin-top:14px">${navLiveHtml(myLoc(), r, carried)}</div>
       <p class="mini dim2" style="margin-top:10px;text-align:center">${carried ? "The orange line is the cached route — followable offline, no signal needed." : "No cached route for this start point — the orange line is a straight-line guide; the compass above updates with your GPS."}</p>
@@ -2599,6 +2615,12 @@
           }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
         } catch (e) { /* GPS optional — the sheet keeps the last known fix */ }
       }
+      const startBtn = $("#navStart", sheet);
+      if (startBtn) startBtn.addEventListener("click", () => {
+        haptic(8);
+        closeSheet(); // stops the sheet's GPS watch; nav owns GPS from here
+        window.SkyNav.start({ res: r, route: carried });
+      });
       const toggle = $("#stepsToggle", sheet), list = $("#stepsList", sheet);
       if (toggle && list) toggle.addEventListener("click", () => {
         haptic(5);
@@ -2644,7 +2666,7 @@
 
   function drawMapLoop() {
     requestAnimationFrame(() => {
-      if (screens.map.classList.contains("active")) drawMap();
+      if (screens.map.classList.contains("active") && !(window.SkyNav && window.SkyNav.active)) drawMap(); // nav mode draws its own canvas
       drawMapLoop();
     });
   }
@@ -2841,6 +2863,8 @@
     const meId = state.identity ? state.identity.deviceId : null;
     const view = state.meshView || "neighbors";
     const gateway = state.mode === "gateway";
+    const prevTop = el.scrollTop;
+    const wasAtBottom = el.scrollHeight - el.clientHeight - prevTop < 48;
     const feed = meshFeed();
     const sat = lsGet(LS.sat, null);
     const satChip = sat
@@ -3028,6 +3052,7 @@
       ${galleryHtml}`;
 
     wireComposer(el);
+    el.scrollTop = wasAtBottom ? el.scrollHeight : prevTop;
     el.querySelectorAll(".mesh-tab").forEach((b) => b.addEventListener("click", () => {
       haptic(6);
       state.meshView = b.dataset.mview;
@@ -3122,6 +3147,10 @@
   function wireComposer(el) {
     const ta = $("#meshText", el);
     const view = state.meshView || "neighbors";
+    // a poll that arrived while typing was held back — apply it once the box is empty and unfocused
+    ta.addEventListener("blur", () => {
+      setTimeout(() => { if (state.meshDirty && !ta.value && document.activeElement !== ta && state.tab === "mesh") { state.meshDirty = false; renderMesh(); } }, 150);
+    });
     ta.addEventListener("input", () => {
       $("#meshCount", el).textContent = String(280 - ta.value.length);
       ta.style.height = "auto";
@@ -3653,6 +3682,13 @@
           const ta2 = $("#meshText", screens.mesh);
           if (ta2 && draft) { ta2.value = draft; ta2.dispatchEvent(new Event("input")); }
         },
+      });
+    }
+    if (window.SkyNav) {
+      window.SkyNav.init({
+        myLoc, esc, haptic, toast, prefersReducedMotion, snapToPolyline, hazardMarkersAll, tileKeys,
+        tileImg(z, x, y) { ensureTile(z, x, y); const rec = tileImgs.get(z + "/" + x + "/" + y); return rec && rec.state === "ok" ? rec.img : null; },
+        afterEnd() { if (screens.map.classList.contains("active")) drawMap(); },
       });
     }
     window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway, proj, routeForResource, routeLinePts, routeStepsHtml };

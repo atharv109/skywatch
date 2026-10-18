@@ -3,6 +3,8 @@ import type { Config } from "../config.ts";
 import type { AppDeps } from "../deps.ts";
 import { makeSatelliteFetcher } from "./satellite.ts";
 import { fetchRoute, osrmDistanceKm, preparedRoute, profileFor } from "../routes/osrm.ts";
+import { confidenceFor } from "../confidence.ts";
+import { displayedStatus } from "../map/state.ts";
 import { assembleMeshState, hashPrefix } from "./state.ts";
 import { makeSkywatchChat } from "./skywatch.ts";
 import { SyncError, processSync } from "./sync.ts";
@@ -37,12 +39,18 @@ export function makeSyncPhotoVision(deps: AppDeps, store: MeshStore): ((packet: 
   };
 }
 
+/** Directions cap: routes for the nearest few shelter/community-center candidates. */
+export const DIRECTIONS_MAX_ROUTES = 3;
+const DIRECTIONS_CANDIDATES = 6;
+
 /**
  * Task 10 directions seam: live OSRM ONLY when SKYWATCH_LIVE_SYNC=1 (the same
  * "this sync may touch the internet" knob as the satellite overlay); the COMMITTED
  * prepared pack (Wi-Fi-death fallback) serves ONLY under DEMO_SIGNUP=1 and logs
  * "prepared route served" — never presented as live. Both off = no routes key at
- * all (hermetic/offline determinism unchanged).
+ * all (hermetic/offline determinism unchanged). Routes cover the nearest few
+ * shelter/community-center resources REGARDLESS of verification (each carries
+ * to.status/confidence/verified so the app can badge unverified ones).
  */
 function makeDirectionsFetcher(
   config: Config,
@@ -57,40 +65,52 @@ function makeDirectionsFetcher(
     const lon = originRaw.lon;
     if (typeof lat !== "number" || !Number.isFinite(lat) || typeof lon !== "number" || !Number.isFinite(lon)) return [];
     const match = await deps.match();
-    // The VERIFIED-OPEN shelter (shelter-kind, open, confidence >= 0.5) — the same
-    // resource the bundle's `nearestVerifiedShelter` shows this sync.
-    const nearest = await match.nearestOpenResource({ type: "Point", coordinates: [lon, lat] }, now);
-    if (!nearest) return [];
-    const to = {
-      shelterId: nearest.sourceId,
-      name: nearest.name,
-      lat: nearest.loc.coordinates[1],
-      lon: nearest.loc.coordinates[0],
-    };
-    let route: MeshRouteView | null = null;
-    if (config.liveSync) {
-      const profile = profileFor(nearest.distanceKm > 0 ? nearest.distanceKm : osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon }));
-      const fetched = await fetchRoute({ lat, lon }, { lat: to.lat, lon: to.lon }, profile, injFetcher);
-      if (fetched) {
-        route = { ...fetched, from: { lat, lon }, to, profile, fetchedAt: now, source: "live" };
+    // Nearest few shelter / community_center resources REGARDLESS of verification:
+    // verification decays (30-min half-life) so gating routes on verified-open left
+    // users with no route at all. The route is a geometry FACT; whether the PLACE is
+    // open stays honest — status/confidence/verified ride on `to` and the app badges
+    // every unverified route. An unverified shelter is NEVER shown as open.
+    const candidates = await match.nearestShelterResources({ type: "Point", coordinates: [lon, lat] }, DIRECTIONS_CANDIDATES);
+    const out: MeshRouteView[] = [];
+    for (const nearest of candidates) {
+      if (out.length >= DIRECTIONS_MAX_ROUTES) break;
+      const confidence = confidenceFor("shelter", nearest.verifiedAt, now);
+      const shownStatus = displayedStatus(nearest.status, confidence);
+      const to = {
+        shelterId: nearest.sourceId,
+        name: nearest.name,
+        lat: nearest.loc.coordinates[1],
+        lon: nearest.loc.coordinates[0],
+        status: shownStatus,
+        confidence: Math.round(confidence * 100) / 100,
+        verified: shownStatus === "open",
+        kind: nearest.kind,
+      };
+      const straightKm = nearest.distanceKm > 0 ? nearest.distanceKm : osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon });
+      let route: MeshRouteView | null = null;
+      if (config.liveSync) {
+        const profile = profileFor(straightKm);
+        const fetched = await fetchRoute({ lat, lon }, { lat: to.lat, lon: to.lon }, profile, injFetcher);
+        if (fetched) route = { ...fetched, from: { lat, lon }, to, profile, fetchedAt: now, source: "live" };
       }
-    }
-    if (!route && config.demoSignup) {
-      const pack = await preparedRoute({ lat, lon }, to.shelterId);
-      if (pack) {
-        route = {
-          ...pack.route,
-          from: { lat, lon },
-          to,
-          profile: profileFor(osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon })),
-          fetchedAt: now,
-          source: "fixture",
-        };
-        // Honesty marker: the fixture pack must NEVER masquerade as live.
-        console.log("prepared route served (fixture pack):", to.name);
+      if (!route && config.demoSignup) {
+        const pack = await preparedRoute({ lat, lon }, to.shelterId);
+        if (pack) {
+          route = {
+            ...pack.route,
+            from: { lat, lon },
+            to,
+            profile: profileFor(osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon })),
+            fetchedAt: now,
+            source: "fixture",
+          };
+          // Honesty marker: the fixture pack must NEVER masquerade as live.
+          console.log("prepared route served (fixture pack):", to.name);
+        }
       }
+      if (route) out.push(route);
     }
-    return route ? [route] : [];
+    return out;
   };
 }
 

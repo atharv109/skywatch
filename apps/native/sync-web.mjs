@@ -15,7 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webDir = join(here, "..", "web");
 const wwwDir = join(here, "www");
 
-const COPY_FILES = ["app.html", "app.js", "app.css", "manifest.webmanifest"];
+const COPY_FILES = ["app.html", "app.js", "app.css", "nav.js", "manifest.webmanifest"];
 const COPY_DIRS = ["tiles", "icons", "brand"];
 
 for (const f of COPY_FILES) statSync(join(webDir, f)); // throws if the web app moved — fail loud

@@ -37,6 +37,12 @@ export interface MatchStore {
    * as shelter, so naming a pharmacy there would read as a shelter claim.
    */
   nearestOpenResource(point: Point, now: number): Promise<MatchedResource | null>;
+  /**
+   * Nearest shelter / community_center resources REGARDLESS of verification state
+   * (directions only — a route to an unverified place is useful; claiming it is OPEN
+   * is not, so callers must badge by confidence). Sorted by distance, capped at `limit`.
+   */
+  nearestShelterResources(point: Point, limit: number): Promise<MatchedResource[]>;
   /** Fresh (confidence >= 0.5) flooded/blocked roads within radiusKm; sorted by distance, capped at 2. */
   blockedRoadsNear(point: Point, now: number, radiusKm: number): Promise<MatchedRoad[]>;
 }
@@ -74,6 +80,19 @@ export function mongoMatchStore(db: Db): MatchStore {
         .toArray();
       const hit = doc[0];
       return hit ? { ...hit, distanceKm: hit.distanceM / 1000 } : null;
+    },
+    async nearestShelterResources(point, limit) {
+      const docs = await db
+        .collection<ResourceDoc>(COLLECTIONS.resources)
+        .aggregate<{ distanceM: number } & ResourceDoc>()
+        .geoNear({
+          near: pointGeometry(point),
+          distanceField: "distanceM",
+          query: { kind: { $in: ["shelter", "community_center"] } },
+        })
+        .limit(limit)
+        .toArray();
+      return docs.map((d) => ({ ...d, distanceKm: d.distanceM / 1000 }));
     },
     async blockedRoadsNear(point, now, radiusKm) {
       return db
@@ -123,6 +142,13 @@ export function memoryMatchStore(app: AppStore): MatchStore {
         )
         .map((r) => ({ ...r, distanceKm: haversineKm(point.coordinates, r.loc.coordinates) }));
       return candidates.sort((a, b) => a.distanceKm - b.distanceKm)[0] ?? null;
+    },
+    async nearestShelterResources(point, limit) {
+      return (await app.listResources())
+        .filter((r) => r.kind === "shelter" || r.kind === "community_center")
+        .map((r) => ({ ...r, distanceKm: haversineKm(point.coordinates, r.loc.coordinates) }))
+        .sort((a, b) => a.distanceKm - b.distanceKm)
+        .slice(0, limit);
     },
     async blockedRoadsNear(point, now, radiusKm) {
       const candidates = (await app.listRoads())

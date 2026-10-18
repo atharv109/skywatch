@@ -8,7 +8,7 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v13";
+const CACHE_VERSION = "sw-v14";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
@@ -34,6 +34,7 @@ const PRECACHE = [
    * the live site; dev server.mjs serves the file, so only production broke). */
   "app.css",
   "app.js",
+  "nav.js",
   "manifest.webmanifest",
   "icons/icon-180.png",
   "icons/icon-512.png",

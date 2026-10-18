@@ -83,7 +83,19 @@ export interface SatelliteSection {
 export type OsrmProfile = "foot" | "driving";
 export interface MeshRouteView {
   from: { lat: number; lon: number };
-  to: { shelterId: string; name: string; lat: number; lon: number };
+  to: {
+    shelterId: string;
+    name: string;
+    lat: number;
+    lon: number;
+    /** Read-time displayed status (open only when verified, confidence >= 0.5) — never claims OPEN for an unverified place. */
+    status?: "open" | "unknown" | "closed" | "full";
+    /** Read-time shelter confidence 0..1 at bundle build. */
+    confidence?: number;
+    /** true iff status === "open" && confidence >= 0.5. false ⇒ the app badges "Shelter not verified — confirm before going". */
+    verified?: boolean;
+    kind?: string;
+  };
   profile: OsrmProfile;
   coords: Array<[number, number]>;
   distanceKm: number;
