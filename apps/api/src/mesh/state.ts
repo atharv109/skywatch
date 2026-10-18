@@ -3,6 +3,7 @@ import { confidenceFor } from "../confidence.ts";
 import type { ResourceDoc } from "../types/docs.ts";
 import type { MeshBeaconDoc, MeshMessageView, MeshPacketDoc, MeshPhotoDoc, MeshState } from "./types.ts";
 import type { MeshStore } from "./store.ts";
+import { SKYWATCH_CORE_ID } from "./types.ts";
 
 /**
  * GET /mesh/state — the dark-zone dashboard layer (Task 8), and the same shape
@@ -80,6 +81,7 @@ export function messageView(p: MeshPacketDoc, photos: Map<string, MeshPhotoDoc>)
     hasPhoto: photo !== undefined,
     photoKind: photo?.kind ?? null,
     photoUrl: photo !== undefined ? `/mesh/photo/${p.photoRef}` : null,
+    core: p.deviceId === SKYWATCH_CORE_ID,
   };
 }
 

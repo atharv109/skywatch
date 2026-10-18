@@ -261,6 +261,8 @@ export interface MeshMessageView {
   hasPhoto: boolean;
   photoKind: MeshPhotoLabel | null;
   photoUrl: string | null;
+  /** True only for the trusted Skywatch core's own replies (server-derived from the stored deviceId; clients route on this, never on the hashed sender). */
+  core: boolean;
 }
 
 export interface MeshState {

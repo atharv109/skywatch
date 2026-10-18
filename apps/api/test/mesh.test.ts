@@ -478,6 +478,7 @@ describe("Task 8b: msg packets (mesh chat) + messages/resources read surfaces", 
       hasPhoto: false,
       photoKind: null,
       photoUrl: null,
+      core: false,
     });
     expect(state.resources).toEqual([]); // no ResourceDocs seeded in this harness
     expect(state.hazardReports).toHaveLength(0);
@@ -515,7 +516,7 @@ describe("Task 8b: msg packets (mesh chat) + messages/resources read surfaces", 
     const later = await assembleMeshState(h.meshStore, NOW + 90 * 60_000);
     expect(later.messages.map((m) => m.text)).toEqual(["broadcast nearby", "broadcast far away", "direct to someone else", "direct to gateway"]);
     for (const m of later.messages) {
-      expect(Object.keys(m).sort()).toEqual(["from", "hasPhoto", "hops", "id", "photoKind", "photoRef", "photoUrl", "text", "to", "ts"]);
+      expect(Object.keys(m).sort()).toEqual(["core", "from", "hasPhoto", "hops", "id", "photoKind", "photoRef", "photoUrl", "text", "to", "ts"]);
     }
   });
 

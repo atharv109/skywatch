@@ -2654,9 +2654,7 @@
    * MESH tab rendering — three surfaces: NEIGHBORS / DIRECTS / SKYWATCH
    * =======================================================================*/
 
-  /* The server hashes every sender id (sha256 first 10 hex), the trusted core included:
-   * 1b20876ad5 = hash("SKYWATCH-CORE"). Ask Skywatch replies arrive under that hash. */
-  const CORE_RE = /skywatch|^1b20876ad5$/i;
+  // Core (trusted Skywatch) replies are flagged server-side as m.core; never inferred from the hashed sender.
 
   function fmtFetchedAt(v) {
     const d = v == null ? null : new Date(typeof v === "number" ? v : String(v));
@@ -2667,17 +2665,17 @@
   function meshFeed() {
     const seen = new Set();
     const out = [];
-    const add = (from, to, text, ts, photoRef, label, hazard) => {
+    const add = (from, to, text, ts, photoRef, label, hazard, core) => {
       from = String(from || "");
       if (!from || (text == null && !photoRef && !hazard)) return;
       const key = from + "|" + (to || "") + "|" + String(text) + "|" + String(ts);
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ from, to: to || null, text: String(text || ""), ts: +ts || 0, photoRef: photoRef || null, label: String(label || ""), hazard: hazard || null });
+      out.push({ from, to: to || null, text: String(text || ""), ts: +ts || 0, photoRef: photoRef || null, label: String(label || ""), hazard: hazard || null, core: core === true });
     };
     const mesh = cached("mesh");
-    ((mesh && mesh.data && mesh.data.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label, m.hazard));
-    ((state.bundle && state.bundle.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label, m.hazard));
+    ((mesh && mesh.data && mesh.data.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label, m.hazard, m.core));
+    ((state.bundle && state.bundle.messages) || []).forEach((m) => add(m.from, m.to, m.text, m.ts, m.photoRef, m.label, m.hazard, m.core));
     out.sort((a, b) => a.ts - b.ts);
     return out;
   }
@@ -2779,7 +2777,7 @@
   /** o: { group: show sender labels, first, last: run position, status: text under the bubble } */
   function bubbleHtml(m, meId, withReply, o) {
     o = o || { first: true, last: true };
-    const core = CORE_RE.test(m.from);
+    const core = m.core === true;
     const mine = m.from === meId || m.mine === true;
     const photoOnly = !!m.photoRef && (!m.text || m.text === "photo");
     const key = [m.from, m.to || "", m.ts, m.text].join("|");
@@ -2808,7 +2806,7 @@
   function threadHtml(arr, meId, opts) {
     const group = !!opts.group;
     const isMine = (m) => m.from === meId || m.mine === true;
-    const senderOf = (m) => (CORE_RE.test(m.from) ? "core" : isMine(m) ? "me" : String(m.from));
+    const senderOf = (m) => (m.core === true ? "core" : isMine(m) ? "me" : String(m.from));
     let lastOut = -1;
     arr.forEach((m, i) => { if (isMine(m)) lastOut = i; });
     let out = "";
@@ -2865,10 +2863,10 @@
           : "";
 
     /* NEIGHBORS — the broadcast thread + my unsent broadcasts */
-    const broadcasts = feed.filter((m) => !m.to && !CORE_RE.test(m.from)).slice(-14);
+    const broadcasts = feed.filter((m) => !m.to && !m.core).slice(-14);
     /* neighbors unread badge — same design as the Directs badge (2 s poll lands
      * them without user action; being ON the Neighbors surface means seen) */
-    const nbUnseen = view === "neighbors" ? 0 : (meId ? feed.filter((m) => !m.to && !CORE_RE.test(m.from) && m.ts > (state.nbSeenAt || 0)).length : 0);
+    const nbUnseen = view === "neighbors" ? 0 : (meId ? feed.filter((m) => !m.to && !m.core && m.ts > (state.nbSeenAt || 0)).length : 0);
     state.queue.filter((p) => p.kind === "msg" && !p.to && (p.state === "queued" || p.state === "fail")).forEach((p) => {
       broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, hazard: p.hazard || null, mine: true, queued: true });
     });
@@ -2879,7 +2877,7 @@
     /* DIRECTS — per-peer threads (1:1), one tap from any neighbor message */
     const threads = {};
     feed.forEach((m) => {
-      if (CORE_RE.test(m.from) || m.to === "SKYWATCH") return;
+      if (m.core === true || m.to === "SKYWATCH") return;
       const peer = m.to && m.to === meId ? m.from : m.from === meId ? m.to : null;
       if (!peer || peer === meId) return;
       (threads[peer] = threads[peer] || []).push(m);
@@ -2893,8 +2891,8 @@
     const dmArr = (state.dmPeer && threads[state.dmPeer]) || [];
     /* DIRECTS badge: received DMs (to === my hash) not seen yet — mesh state poll
      * (every 2 s online/gateway) lands them without any user action */
-    const dmUnseen = view === "directs" ? 0 : (meId ? feed.filter((m) => m.to === meId && !CORE_RE.test(m.from) && m.ts > (state.dmSeenAt || 0)).length : 0);
-    const peerNew = (arr) => arr.some((m) => m.to === meId && !CORE_RE.test(m.from) && m.ts > (state.dmSeenAt || 0));
+    const dmUnseen = view === "directs" ? 0 : (meId ? feed.filter((m) => m.to === meId && !m.core && m.ts > (state.dmSeenAt || 0)).length : 0);
+    const peerNew = (arr) => arr.some((m) => m.to === meId && !m.core && m.ts > (state.dmSeenAt || 0));
     const directsHtml = state.dmPeer
       ? `<div class="msg-head">
             <button class="msg-back" data-dm-back aria-label="All threads">${ICON_CHEV_LEFT}<span>Threads</span></button>
@@ -2917,7 +2915,7 @@
 
     /* SKYWATCH — the Ask Skywatch surface, shield-branded and separate */
     const skyThread = feed
-      .filter((m) => CORE_RE.test(m.from) || m.to === "SKYWATCH")
+      .filter((m) => m.core === true || m.to === "SKYWATCH")
       .map((m) => Object.assign({}, m, { mine: m.to === "SKYWATCH" }));
     state.queue.filter((p) => p.kind === "msg" && p.to === "SKYWATCH").forEach((p) => {
       if (p.state === "sent" && meId && feed.some((m) => m.from === meId && m.to === "SKYWATCH" && m.text === (p.text || "photo"))) return;
@@ -3073,12 +3071,12 @@
     if (gwRestore) gwRestore.addEventListener("click", () => { state.netOverride = null; setMode("online", { quiet: true }); });
     if (view === "directs" && meId) {
       // opening/being in Directs marks every DM addressed to me as seen
-      const newest = feed.filter((m) => m.to === meId && !CORE_RE.test(m.from)).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
+      const newest = feed.filter((m) => m.to === meId && !m.core).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
       if (newest > (state.dmSeenAt || 0)) state.dmSeenAt = newest;
     }
     if (view === "neighbors" && meId) {
       // being ON the Neighbors surface marks every broadcast as seen (badge clears)
-      const newest = feed.filter((m) => !m.to && !CORE_RE.test(m.from)).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
+      const newest = feed.filter((m) => !m.to && !m.core).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
       if (newest > (state.nbSeenAt || 0)) state.nbSeenAt = newest;
     }
     renderMeshSigChip();
