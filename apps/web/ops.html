@@ -120,6 +120,18 @@ label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
 
     <div>
       <div class="panel">
+        <h2>Status history (Tiger Data)</h2>
+        <label>Entity</label>
+        <select id="tsEntity" style="width:100%"></select>
+        <div class="row" style="margin-top:8px">
+          <button id="tsLoad">Load 6h history</button>
+          <span class="chip gray" id="tsState">idle</span>
+        </div>
+        <div id="tsChart" style="margin-top:10px"></div>
+        <div id="tsRows" style="margin-top:10px"></div>
+        <p class="dim" style="margin:8px 0 0;font-size:12px">GET /tools/status-history — the Timescale status_events mirror (confidence decays with the shelter half-life). When TIGER_DATABASE_URL is unset the panel says so — it does not fake Mongo data.</p>
+      </div>
+      <div class="panel">
         <h2>Manual verify (check-in)</h2>
         <label>Select resource</label>
         <select id="vres" style="width:100%"></select>
@@ -249,6 +261,15 @@ label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
       }).join("") || '<tr><td class="dim">none</td></tr>';
 
     renderMesh(st.mesh);
+
+    // Tiger panel entity picker: the resources in state + the current roads' camera ids.
+    var tsEnt = $("tsEntity").value;
+    var tsOptions = (st.resources || []).map(function (r) {
+      return '<option value="' + esc(r.sourceId) + '"' + (r.sourceId === tsEnt ? " selected" : "") + ">" + esc(r.name) + " (" + esc(r.kind) + ")</option>";
+    }).concat((st.roads || []).slice(0, 2).map(function (r) {
+      return '<option value="' + esc(r.cameraId) + '"' + (r.cameraId === tsEnt ? " selected" : "") + ">road: " + esc(r.name) + "</option>";
+    }));
+    $("tsEntity").innerHTML = tsOptions.join("") || "<option value=''>— replay a scenario first —</option>";
   }
 
   function renderMesh(mesh) {
@@ -338,6 +359,69 @@ label{font-size:12px;color:var(--dim);display:block;margin:8px 0 3px}
   }
   $("replaySmoke").addEventListener("click", function () { doReplay("smoke"); });
   $("replayFlood").addEventListener("click", function () { doReplay("flood"); });
+
+  // ---- Tiger Data status history (read-only, honest) ------------------------
+  function loadHistory() {
+    var e = $("tsEntity").value;
+    if (!e) { $("tsState").textContent = "pick an entity (replay a scenario first)"; return; }
+    $("tsState").className = "chip gray";
+    $("tsState").textContent = "loading…";
+    fetch(url("/tools/status-history?entity=" + encodeURIComponent(e) + "&hours=6"), { headers: toolHeaders() })
+      .then(function (r) { return r.json().then(function (j) { j.__status = r.status; return j; }); })
+      .then(function (j) {
+        if (j.configured === false) {
+          $("tsState").className = "chip warn";
+          $("tsState").textContent = "Tiger not configured";
+          $("tsChart").innerHTML = "";
+          $("tsRows").innerHTML = '<p class="dim">TIGER_DATABASE_URL is unset — the status_events mirror is inert and Mongo verifiedAt stays the source of truth. Nothing is faked here.</p>';
+          return;
+        }
+        if (j.__status === 401) { $("tsState").className = "chip warn"; $("tsState").textContent = "auth 401 (set TOOL_SECRET)"; return; }
+        if (j.__status !== 200) { $("tsState").className = "chip bad"; $("tsState").textContent = "read failed (" + j.__status + ")"; return; }
+        drawHistory(j);
+      })
+      .catch(function (err) { $("tsState").className = "chip bad"; $("tsState").textContent = "fetch failed: " + err; });
+  }
+
+  function drawHistory(j) {
+    var rows = j.rows || [];
+    $("tsState").className = "chip ok";
+    $("tsState").textContent = rows.length + " event(s) · tiger";
+    var W = 560, H = 110, pad = 5;
+    var tEnd = j.generatedAt || Date.now();
+    var tStart = tEnd - (j.hours || 6) * 3600000;
+    var pts = (j.confidenceSeries || []).map(function (p) {
+      var x = pad + ((p.time - tStart) / (tEnd - tStart)) * (W - pad * 2);
+      var y = H - pad - Math.max(0, Math.min(1, p.confidence)) * (H - pad * 2);
+      return [x.toFixed(1), y.toFixed(1)];
+    });
+    $("tsChart").innerHTML =
+      '<svg width="100%" viewBox="0 0 ' + W + " " + H + '" style="background:var(--panel2);border:1px solid var(--border);border-radius:8px">' +
+      '<line x1="' + pad + '" y1="' + (H - pad) + '" x2="' + (W - pad) + '" y2="' + (H - pad) + '" stroke="#232b3b"/>' +
+      '<line x1="' + pad + '" y1="' + pad + '" x2="' + pad + '" y2="' + (H - pad) + '" stroke="#232b3b"/>' +
+      (pts.length
+        ? '<polyline fill="none" stroke="#5ee6a8" stroke-width="2" points="' + pts.map(function (p) { return p.join(","); }).join(" ") + '"/>' +
+          pts.map(function (p) { return '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="2.5" fill="#5ee6a8"/>'; }).join("")
+        : "") +
+      "</svg>" +
+      (pts.length ? "" : '<p class="dim">no events in the last ' + esc(j.hours || 6) + "h for this entity</p>");
+    var SOURCE_CHIP = { manual: "part", call: "gray" };
+    $("tsRows").innerHTML =
+      "<table style='font-size:12px;overflow:auto'><tr><th>time</th><th>status</th><th>source</th><th>conf</th></tr>" +
+      rows
+        .slice()
+        .reverse()
+        .map(function (r) {
+          return (
+            "<tr><td class='dim'>" + time(r.time) + "</td><td>" + statusChip(r.status) + "</td>" +
+            "<td><span class='chip " + (SOURCE_CHIP[r.sourceType] || "gray") + "'>" + esc(r.sourceType) + "</span></td>" +
+            "<td class='mono'>" + esc(r.capacity === null || r.capacity === undefined ? "" : "cap " + r.capacity + " · ") + esc(r.confidence) + (r.notes ? " · " + esc(r.notes).slice(0, 60) : "") + "</td></tr>"
+          );
+        })
+        .join("") +
+      "</table>";
+  }
+  $("tsLoad").addEventListener("click", loadHistory);
 
   reconnect();
 })();

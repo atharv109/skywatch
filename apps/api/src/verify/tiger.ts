@@ -86,3 +86,49 @@ export function forwardStatusEvents(
     }
   })().catch((err) => console.error("tiger status_events mirror failed:", err instanceof Error ? err.message : err));
 }
+
+/**
+ * Task 8h (READ side — the track's visible artifact): the last N hours of mirrored
+ * events for ONE resource. Same one-throwaway-connection pattern as the write
+ * side, ordered oldest→newest (chart-ready). Injected as the optional
+ * `tigerStatus` dep so the hermetic suite needs no Postgres (the route
+ * 503s {configured:false} when the layer is not wired — never faked from Mongo).
+ */
+export interface TigerStatusRow {
+  /** epoch ms of the event (observed_at). */
+  at: number;
+  status: string;
+  manual: boolean;
+  notes: string | null;
+  capacity: number | null;
+}
+
+export function pgStatusHistoryReader(url: string): (entity: string, hours: number, now: number) => Promise<TigerStatusRow[]> {
+  return async (entity, hours, now) => {
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    try {
+      const res = (await client.query(
+        `SELECT observed_at, status, manual, notes, capacity
+           FROM status_events
+          WHERE resource_id = $1 AND observed_at >= $2
+          ORDER BY observed_at ASC
+          LIMIT 500`,
+        [entity, new Date(now - hours * 3_600_000)],
+      )) as { rows: Array<{ observed_at: Date | string; status: string | null; manual: boolean | null; notes: string | null; capacity: number | null }> };
+      return res.rows.map((r) => ({
+        at: new Date(r.observed_at).getTime(),
+        status: stringOf(r.status) ?? "unknown",
+        manual: r.manual === true,
+        notes: r.notes ?? null,
+        capacity: r.capacity === null || r.capacity === undefined ? null : Number(r.capacity),
+      }));
+    } finally {
+      await client.end();
+    }
+  };
+}
+
+function stringOf(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : typeof v === "number" ? String(v) : null;
+}

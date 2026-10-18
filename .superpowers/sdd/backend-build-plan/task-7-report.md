@@ -250,3 +250,7 @@ cross-ref comment, post_call_summary.ts, voice.test.ts).
 - **Verification:** tsc clean; hermetic 166 pass / 5 skip (171 total); gated
   suite with MONGODB_URI on local mongod (throwaway db `skywatch-fixwave4`,
   dropped after): 171/171, 16 files.
+
+## Append (Task 8h — Tiger Data READ side, the visible artifact)
+
+`GET /tools/status-history?entity=<resourceId>&hours=<1..168, default 6>` (TOOL_SECRET posture like the other /tools reads): when TIGER_DATABASE_URL is set it queries the Timescale `status_events` mirror (`pgStatusHistoryReader`, one throwaway connection, oldest→newest, ≤500 rows) and returns `{configured:true, source:"tiger", rows:[{time, status, sourceType: manual|call, notes, capacity, confidence}], confidenceSeries}` — per-row confidence = `src/confidence.ts`'s `confidenceFor("shelter", eventAt, now)` (EXACT dashboard formula, hermetic-tested against 0.5/0.5^{1/4}… anchors: one half-life ⇒ 0.5, four ⇒ 0.06). UNSET ⇒ **503 `{configured:false}` — never faked from Mongo**; a failed live read ⇒ 503 (chart absent, never fake). Injected as the optional `tigerStatus` dep (mesh/ttsCache pattern) so every landed harness stays untouched; production `defaultDeps` wires pg ONLY when the URL is set. Ops board gains a small "Status history (Tiger Data)" panel (entity picker from state resources + 2 roads, plain-SVG confidence line over the 6h window, rows with source badges, the honest unconfigured state). Tests: +3 hermetic in tiger.test.ts (decay math, unconfigured/gating, validation+default hours).

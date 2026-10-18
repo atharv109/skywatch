@@ -5,8 +5,18 @@
  * demo path; tiger.ts must stay a non-blocking optional mirror).
  */
 import { describe, expect, it } from "vitest";
-import { buildStatusEvent, forwardStatusEvents, type TigerStatusEvent } from "../src/verify/tiger.ts";
+import { buildStatusEvent, forwardStatusEvents, type TigerStatusEvent, type TigerStatusRow } from "../src/verify/tiger.ts";
 import type { ResourceDoc } from "../src/types/docs.ts";
+import type { Config } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
+import { createApp } from "../src/server.ts";
+import { memoryStore } from "../src/store.ts";
+import { memoryMatchStore } from "../src/match/store.ts";
+import { memoryDeliverStore } from "../src/deliver/store.ts";
+import { stubInboundRuntime } from "../src/deliver/runtime.ts";
+import { memoryVerifyStore } from "../src/verify/store.ts";
+import { stubVoiceRuntime } from "../src/deliver/voice_runtime.ts";
+import { emptyPipelineResult } from "../src/pipeline/run.ts";
 
 function checkedInResource(overrides: Partial<ResourceDoc> = {}): ResourceDoc {
   return {
@@ -49,5 +59,101 @@ describe("tiger.ts event builder", () => {
     expect(() => forwardStatusEvents({ tigerDatabaseUrl: null }, [event!])).not.toThrow();
     // Empty event list is also inert even with a URL set.
     expect(() => forwardStatusEvents({ tigerDatabaseUrl: "postgres://user@localhost/nothing" }, [])).not.toThrow();
+  });
+});
+
+/**
+ * Task 8h READ side: GET /tools/status-history — hermetic with the INJECTED
+ * tigerStatus dep (fake rows -> the route must apply the EXACT confidence.ts
+ * decay); the unconfigured posture is 503 {configured:false} (never fake Mongo data).
+ */
+describe("GET /tools/status-history (Tiger READ, injected rows)", () => {
+  interface HistoryJson {
+    configured: boolean;
+    source: string;
+    entity: string;
+    hours: number;
+    generatedAt: number;
+    error?: string;
+    rows?: Array<{ time: number; status: string; sourceType: string; notes: string | null; capacity: number | null; confidence: number }>;
+    confidenceSeries?: Array<{ time: number; confidence: number }>;
+  }
+
+  const statusOf = (r: Response | Promise<Response>): number => (r instanceof Promise ? NaN : r.status);
+
+  function appWithHistory(reader?: (entity: string, hours: number, now: number) => Promise<TigerStatusRow[]>, configEnv: Record<string, string> = {}): ReturnType<typeof createApp> {
+    const astore = memoryStore();
+    return createApp(loadConfig({ REPLAY: "1", ...configEnv }), {
+      store: async () => astore,
+      pipeline: async () => emptyPipelineResult(),
+      inbound: stubInboundRuntime(),
+      match: async () => memoryMatchStore(astore),
+      deliver: async () => memoryDeliverStore(),
+      verify: async () => memoryVerifyStore(),
+      voice: stubVoiceRuntime(),
+      ...(reader ? { tigerStatus: reader } : {}),
+    });
+  }
+
+  const NOW = Date.parse("2026-10-18T02:00:00.000Z");
+
+  /** three events: fresh, exactly one half-life old, exactly four half-lives old */
+  const fakeRows = (entity: string, hours: number, now: number): Promise<TigerStatusRow[]> => {
+    expect(entity).toBe("8h-shelter");
+    expect(hours).toBe(6);
+    return Promise.resolve([
+      { at: now - 5 * 60_000, status: "open", manual: true, notes: "walked past", capacity: 40 },
+      { at: now - 30 * 60_000, status: "open", manual: false, notes: null, capacity: null },
+      { at: now - 120 * 60_000, status: "full", manual: false, notes: null, capacity: 12 },
+    ]);
+  };
+
+  const get = async (app: ReturnType<typeof createApp>, url: string): Promise<{ res: Response; j: HistoryJson }> => {
+    const res = await app.request(url);
+    return { res, j: (await res.json()) as HistoryJson };
+  };
+
+  it("rows + the decay math EXACTLY as src/confidence.ts (shelter 30-min half-life); manual -> 'manual'/'call' badges", async () => {
+    const { res, j } = await get(appWithHistory(fakeRows), "/tools/status-history?entity=8h-shelter&hours=6");
+    expect(res.status).toBe(200);
+    expect(j.configured).toBe(true);
+    expect(j.source).toBe("tiger");
+    expect(j.rows).toHaveLength(3);
+    expect(j.rows![0]).toMatchObject({ status: "open", sourceType: "manual", notes: "walked past", capacity: 40 });
+    expect(j.rows![1]!.sourceType).toBe("call");
+    // the EXACT dashboard formula: 0.5^(minutes/30), rounded to 2 decimals
+    const expectConf = (ageMin: number): number => Math.round(Math.pow(0.5, ageMin / 30) * 100) / 100;
+    expect(j.rows![0]!.confidence).toBe(expectConf(5)); // 0.89
+    expect(j.rows![1]!.confidence).toBe(0.5); // one half-life exactly
+    expect(j.rows![2]!.confidence).toBe(0.06); // four half-lives: 0.5^4 = 0.0625
+    expect(j.confidenceSeries!.map((p) => p.confidence)).toEqual(j.rows!.map((r) => r.confidence));
+  });
+
+  it("unconfigured: 503 {configured:false} and NOTHING faked; tool secret gates like other /tools reads; the read still never fakes Mongo", async () => {
+    const { res, j } = await get(appWithHistory(), "/tools/status-history?entity=x");
+    expect(res.status).toBe(503);
+    expect(j.configured).toBe(false);
+    expect(j.error).toContain("TIGER_DATABASE_URL");
+    expect(j.error).toContain("source of truth");
+    expect(j.rows).toBeUndefined();
+
+    const gated = appWithHistory(fakeRows, { TOOL_SECRET: "s3cret" });
+    expect((await gated.request("/tools/status-history?entity=8h-shelter")).status).toBe(401);
+    expect((await gated.request("/tools/status-history?entity=8h-shelter", { headers: { "X-Skywatch-Tool-Secret": "s3cret" } })).status).toBe(200);
+  });
+
+  it("validation: entity required; hours in (0,168] with default 6; the reader receives the parsed hours", async () => {
+    const seen: Array<[string, number]> = [];
+    const app = appWithHistory((entity, hours, now) => {
+      seen.push([entity, hours]);
+      return Promise.resolve([]);
+    });
+    expect((await app.request("/tools/status-history")).status).toBe(400);
+    expect((await app.request("/tools/status-history?entity=x&hours=0")).status).toBe(400);
+    expect((await app.request("/tools/status-history?entity=x&hours=200")).status).toBe(400);
+    expect((await app.request("/tools/status-history?entity=x&hours=168")).status).toBe(200);
+    expect((await app.request("/tools/status-history?entity=default-check")).status).toBe(200);
+    expect(seen).toContainEqual(["x", 168]);
+    expect(seen).toContainEqual(["default-check", 6]);
   });
 });

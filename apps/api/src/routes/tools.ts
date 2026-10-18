@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Config } from "../config.ts";
 import type { AppDeps } from "../deps.ts";
 import { buildUserBrief } from "../brief/build.ts";
+import { confidenceFor } from "../confidence.ts";
 import type { UserRecord } from "../deliver/store.ts";
 
 /**
@@ -101,6 +102,56 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
     } catch (err) {
       console.error("tools/summary-audio failed:", err instanceof Error ? err.message : err);
       return c.json({ error: "summary audio unavailable" }, 503);
+    }
+  });
+
+  /**
+   * Task 8h (Tiger Data READ side — the track's visible artifact): the last N
+   * hours of ONE resource's mirrored status_events. TIGER-ONLY: when the layer is
+   * not configured the route answers 503 {configured:false} and NEVER fakes rows
+   * from Mongo (verifiedAt stays the demo source of truth). Per-row confidence is
+   * the stored event's age decayed with the SAME src/confidence.ts formula the
+   * dashboard uses (shelter half-life), so the chart and the map agree.
+   */
+  app.get("/status-history", async (c) => {
+    if (deniedFor(c.req.header())) return c.json({ error: "missing or wrong tool secret" }, 401);
+    if (!deps.tigerStatus) {
+      return c.json(
+        { configured: false, error: "Tiger Data layer not configured (TIGER_DATABASE_URL unset) — status_events mirror is inert; Mongo verifiedAt is the source of truth" },
+        503,
+      );
+    }
+    const entity = c.req.query("entity") ?? "";
+    const hoursRaw = c.req.query("hours");
+    const hours = hoursRaw === undefined || hoursRaw === "" ? 6 : Number(hoursRaw);
+    if (entity.length === 0 || entity.length > 200 || !Number.isFinite(hours) || hours <= 0 || hours > 168) {
+      return c.json({ error: "entity required; hours in (0, 168] (default 6)" }, 400);
+    }
+    try {
+      const now = Date.now();
+      const rows = await deps.tigerStatus(entity, hours, now);
+      const decayed = (at: number): number => Math.round(confidenceFor("shelter", at, now) * 100) / 100;
+      return c.json({
+        configured: true,
+        source: "tiger",
+        entity,
+        hours,
+        generatedAt: now,
+        rows: rows.map((r) => ({
+          time: r.at,
+          status: r.status,
+          // the mirror only sees manual check-ins and voice-call outcomes today;
+          // feed/vision mirrors would add distinct kinds later
+          sourceType: r.manual ? "manual" : "call",
+          notes: r.notes,
+          capacity: r.capacity,
+          confidence: decayed(r.at),
+        })),
+        confidenceSeries: rows.map((r) => ({ time: r.at, confidence: decayed(r.at) })),
+      });
+    } catch (err) {
+      console.error("status-history read failed:", err instanceof Error ? err.message : err);
+      return c.json({ configured: true, error: "Tiger Data read failed (the chart stays absent, never fake)" }, 503);
     }
   });
 

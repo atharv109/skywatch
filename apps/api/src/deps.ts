@@ -8,6 +8,7 @@ import { mongoMatchStore, type MatchStore } from "./match/store.ts";
 import { getDb } from "./db/client.ts";
 import { createInboundContext, createInboundRuntime, type InboundRuntime } from "./deliver/runtime.ts";
 import { createVoiceRuntime, type VoiceRuntime } from "./deliver/voice_runtime.ts";
+import { pgStatusHistoryReader, type TigerStatusRow } from "./verify/tiger.ts";
 import { mongoVerifyStore, type VerifyStore } from "./verify/store.ts";
 import { mongoMeshStore, type MeshStore } from "./mesh/store.ts";
 import { mongoTtsCache, type TtsCache } from "./deliver/grok-tts.ts";
@@ -45,6 +46,12 @@ export interface AppDeps {
    * defaultDeps always wires it.
    */
   ttsCache?: () => Promise<TtsCache>;
+  /**
+   * Task 8h Tiger Data READ (status_events history for one resource). OPTIONAL:
+   * wired only when TIGER_DATABASE_URL is set — /tools/status-history reads the
+   * absent dep as {configured:false} (nothing is ever faked from Mongo).
+   */
+  tigerStatus?: (entity: string, hours: number, now: number) => Promise<TigerStatusRow[]>;
 }
 
 export function defaultDeps(config: Config): AppDeps {
@@ -57,6 +64,8 @@ export function defaultDeps(config: Config): AppDeps {
     verify: () => getDb(config).then(mongoVerifyStore),
     voice: createVoiceRuntime(config, { ttsCache: () => getDb(config).then(mongoTtsCache) }),
     mesh: () => getDb(config).then(mongoMeshStore),
+    // Task 8h Tiger READ: wired ONLY when the mirror layer is configured.
+    ...(config.tigerDatabaseUrl ? { tigerStatus: pgStatusHistoryReader(config.tigerDatabaseUrl) } : {}),
   };
 }
 
