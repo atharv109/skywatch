@@ -159,14 +159,19 @@
     const errEl = $("#obResumeErr", obEl);
     const btn = $("#obResume", obEl);
     const input = $("#obResumePhone", obEl);
-    let raw = String(input ? input.value : "").trim().replace(/[\s().-]/g, "");
-    if (!/^\+\d{11,15}$/.test(raw)) {
-      // tolerate a US number typed without the country code
-      if (/^1\d{10}$/.test(raw)) raw = "+" + raw;
-      else if (/^\d{10}$/.test(raw)) raw = "+1" + raw;
+    // normalize to E.164 before any POST — a bare "4258329409" (or "(425) 832-9409",
+    // unicode dashes/spaces) must become "+14258329409", never sent raw
+    const typed = String(input ? input.value : "");
+    const hasPlus = /^\s*\+/.test(typed);
+    const digits = typed.replace(/\D+/g, "");
+    let raw = null;
+    if (!hasPlus && (digits.length === 10 || (digits.length === 11 && digits[0] === "1"))) {
+      raw = "+1" + digits.slice(digits.length - 10);
+    } else if (hasPlus && /^\d{11,15}$/.test(digits)) {
+      raw = "+" + digits;
     }
-    if (!/^\+\d{11,15}$/.test(raw)) {
-      if (errEl) { errEl.style.display = "block"; errEl.textContent = "That doesn't look like an E.164 phone — e.g. +14255550123."; }
+    if (!raw) {
+      if (errEl) { errEl.style.display = "block"; errEl.textContent = "That doesn't look like a phone number — e.g. 4258329409 or +14258329409."; }
       return;
     }
     if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
@@ -834,7 +839,7 @@
             <p class="mini dim2" style="margin:4px 0 9px">Enter the phone you texted from — Skywatch continues where your real signup left off.</p>
             <div style="display:flex;gap:8px">
               <input id="obResumePhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 425 555 0100" style="flex:1;min-height:46px;padding:0 13px;background:var(--surface2);border:1px solid var(--line2);border-radius:13px;color:var(--text);font:inherit">
-              <button class="btn btn-ok" id="obResume" style="min-height:46px;padding:0 16px;font-weight:600">Continue</button>
+              <button class="btn btn-primary" id="obResume" style="min-height:46px;padding:0 16px;font-weight:600">Continue</button>
             </div>
             <p class="mini" id="obResumeErr" style="margin-top:8px;color:var(--warn);display:none"></p>
           </div>
