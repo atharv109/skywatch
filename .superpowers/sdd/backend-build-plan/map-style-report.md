@@ -29,6 +29,12 @@ Fixes for the three on-device findings, verified headless Chromium 390×844 (scr
 
 Screenshots: `map-ui-home-brief.png` (personalized), `map-ui-home-area.png` (area fallback + join), `map-ui-directs.png` (received-DM thread + badge behavior asserted).
 
+## Follow-up 3 — standalone /b brief page (pushed)
+
+`apps/web/b.html` (single file, imports app.css tokens) — reads `?id=<userId>` (or a `/b/<id>` path), fetches same-origin `GET /tools/brief/<id>` with `X-Skywatch-Tool-Secret` from localStorage config when set, and renders the brief in the app's own components: hazard cards + severity chips, ordered actions, verified shelter with the confidence bar (or its honest null-state card), official source, pinned 911 (hazards only). States: skeleton → content, plus honest cards for 404 ("not live"), 401 ("server checks the tool secret"), no-id, and network loss. `b/index.html` is a thin shim redirecting `…/b/…` to `b.html?id=…`. Registered in the SW precache (`sw-v5`). Smoke on the throwaway server: fake id → graceful 404 state (`map-ui-b-404.png`); pushed to origin/main (`a2a4c8e` + SW fix `fd220f8`).
+
+Known gap (api-side): the map link the backend composes is `PUBLIC_BASE_URL + "/b/" + userId` — a static dir-serve answers `/b/<id>` with a 404 before any shim can run. The api repo needs one route (`app.get("/b/:id")` serving b.html's bytes / a rewrite) for text map links to land on the page; until then the page is reachable at `/b.html?id=<id>`.
+
 ## What shipped (original build)
 
 ### 1. Offline tile pack (committed, no network at demo time)
