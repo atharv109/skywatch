@@ -634,9 +634,10 @@
       const changed = sig !== state.meshSig;
       state.meshSig = sig;
       if (!changed && !state.meshDirty) return;
-      if (wasFocused || draft) { state.meshDirty = true; return; }
+      if (draft) { state.meshDirty = true; return; }
       state.meshDirty = false;
       renderMesh();
+      if (wasFocused) { const nf = $("#meshText", screens.mesh); if (nf) nf.focus({ preventScroll: true }); }
       const ta2 = $("#meshText", screens.mesh);
       if (ta2 && draft) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); if (wasFocused) ta2.focus(); }
     }
@@ -1032,6 +1033,8 @@
       const deviceId = await sha256HexPrefix(seed, 10);
       identity = { ok: false, deviceId, legacy: true };
     }
+    // the server stores/serves every sender as sha256(deviceId)[:10]; keep it to recognise our own echoes
+    identity.hash = await sha256HexPrefix(new TextEncoder().encode(identity.deviceId), 10);
     state.identity = identity;
     return identity;
   }
@@ -2687,8 +2690,12 @@
   function meshFeed() {
     const seen = new Set();
     const out = [];
+    const meHash = state.identity && state.identity.hash, meRaw = state.identity && state.identity.deviceId;
     const add = (from, to, text, ts, photoRef, label, hazard, core) => {
       from = String(from || "");
+      // our own sender hash (and DMs addressed to it) map back to the device id the UI compares against
+      if (meHash && from === meHash) from = meRaw;
+      if (meHash && to === meHash) to = meRaw;
       if (!from || (text == null && !photoRef && !hazard)) return;
       const key = from + "|" + (to || "") + "|" + String(text) + "|" + String(ts);
       if (seen.has(key)) return;
@@ -2802,7 +2809,7 @@
     const core = m.core === true;
     const mine = m.from === meId || m.mine === true;
     const photoOnly = !!m.photoRef && (!m.text || m.text === "photo");
-    const key = [m.from, m.to || "", m.ts, m.text].join("|");
+    const key = [m.from, m.to || "", m.text].join("|"); // no ts: the server echo of a sent message must not re-animate it
     const fresh = !bubbleSeen.has(key);
     bubbleSeen.add(key);
     const cls = [
@@ -2891,8 +2898,12 @@
     /* neighbors unread badge — same design as the Directs badge (2 s poll lands
      * them without user action; being ON the Neighbors surface means seen) */
     const nbUnseen = view === "neighbors" ? 0 : (meId ? feed.filter((m) => !m.to && !m.core && m.ts > (state.nbSeenAt || 0)).length : 0);
-    state.queue.filter((p) => p.kind === "msg" && !p.to && (p.state === "queued" || p.state === "fail")).forEach((p) => {
-      broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, hazard: p.hazard || null, mine: true, queued: true });
+    state.queue.filter((p) => p.kind === "msg" && !p.to && (
+      p.state === "queued" || p.state === "fail" ||
+      // just-synced: bridge the gap until /mesh/state echoes it back, so the bubble never vanishes and reappears
+      (p.state === "sent" && Date.now() - (p.queuedAt || 0) < 120000 && !feed.some((m) => m.from === meId && !m.to && m.text === (p.text || "photo")))
+    )).forEach((p) => {
+      broadcasts.push({ from: meId, to: null, text: p.text || "photo", ts: p.ts || p.queuedAt, photoRef: p.photoRef || null, hazard: p.hazard || null, mine: true, queued: p.state !== "sent" });
     });
     const neighborsHtml = `
       <div class="msg-title">Neighbors</div>
@@ -3243,7 +3254,11 @@
       ta.value = "";
       $("#meshCount", el).textContent = "280";
       renderMeshBadge();
+      state.meshDirty = false;
       renderMesh();
+      // keep the keyboard up and the composer on screen, like Messages
+      const nta = $("#meshText", el);
+      if (nta) { nta.focus({ preventScroll: true }); nta.scrollIntoView({ block: "nearest" }); }
     });
   }
 
