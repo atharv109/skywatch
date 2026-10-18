@@ -34,6 +34,7 @@ const TYPES = {
   ".geojson": "application/json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
 };
 
 function proxy(req, res, body) {

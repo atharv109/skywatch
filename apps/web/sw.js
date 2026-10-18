@@ -8,7 +8,7 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v11";
+const CACHE_VERSION = "sw-v12";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
@@ -27,7 +27,11 @@ const TILES = TILE_RANGES.flatMap(({ z, x0, x1, y0, y1 }) => {
 const PRECACHE = [
   "app.html",
   "b.html",
-  "b/index.html",
+  /* NOT "b/index.html": at deploy the API's GET /b/:id route (apps/api/src/routes/index.ts)
+   * shadows that path — /b/index.html parses as id "index.html", fails the hex check and
+   * 404s before the static layer runs. cache.addAll is all-or-nothing, so that one miss
+   * rejected the whole install and the SW was discarded entirely (no offline anything on
+   * the live site; dev server.mjs serves the file, so only production broke). */
   "app.css",
   "app.js",
   "manifest.webmanifest",
@@ -43,9 +47,22 @@ const API_PREFIXES = [
   "/map", "/mesh", "/scenario", "/webhooks", "/tools", "/verify", "/roads", "/health", "/demo", /* demo round-trip: /demo/signup · /demo/area-brief */
 ];
 
+/* app shell — everything in PRECACHE that is not a tile. */
+const SHELL = PRECACHE.filter((p) => !p.startsWith("tiles/"));
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(PRECACHE)).then(() => self.skipWaiting()),
+    caches.open(CACHE_VERSION).then(async (cache) => {
+      // Shell is all-or-nothing: a broken shell means a broken app, so failing
+      // install loudly there is correct. Tiles, though, are cached individually:
+      // one bad tile URL must never again reject the entire install and silently
+      // discard the SW (app.js already degrades a missing tile to the dot-grid).
+      await cache.addAll(SHELL);
+      await Promise.all(
+        TILES.map((t) => cache.add(t).catch((err) => console.warn("sw: tile precache skipped", t, err))),
+      );
+      await self.skipWaiting();
+    }),
   );
 });
 
