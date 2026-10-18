@@ -48,12 +48,16 @@ export function mongoStore(db: Db): AppStore {
       return db.collection<RoadDoc>(COLLECTIONS.roads).find().toArray();
     },
     async listUserDots() {
-      const users = await db.collection(COLLECTIONS.users).find().toArray();
+      // 8c hotfix: a signup-state user has loc:null ("hi" only, no address yet) —
+      // valid rows, NEVER a 500: the $ne:null query filter keeps null locs out of
+      // the projection server-side, and the truthy predicate below stays as the
+      // second guard (a null that slipped past the query would throw on .type).
+      const users = await db.collection(COLLECTIONS.users).find({ loc: { $ne: null } }).toArray();
       return users
         .map((u) => u["loc"] as { type?: string; coordinates?: [number, number] } | undefined)
         .filter((loc): loc is { type: "Point"; coordinates: [number, number] } => {
           return (
-            loc !== undefined && loc.type === "Point" && Array.isArray(loc.coordinates) && loc.coordinates.length === 2
+            loc != null && loc.type === "Point" && Array.isArray(loc.coordinates) && loc.coordinates.length === 2
           );
         })
         .map((loc) => loc.coordinates);

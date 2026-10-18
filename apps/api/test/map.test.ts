@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import type { Db } from "mongodb";
 import { loadConfig } from "../src/config.ts";
+import { COLLECTIONS, closeDb, getDb } from "../src/db/client.ts";
 import { createApp } from "../src/server.ts";
 import { assembleMapState, displayedStatus, confidenceFor, halfLifeMinutes, type MapInputs } from "../src/map/state.ts";
 import { memoryStore } from "../src/store.ts";
+import { memoryMeshStore } from "../src/mesh/store.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
+import type { UserRecord } from "../src/deliver/store.ts";
 import { seedScenarioBase } from "../src/ingest/scenario.ts";
 import { stubInboundRuntime } from "../src/deliver/runtime.ts";
 import { memoryVerifyStore } from "../src/verify/store.ts";
@@ -203,4 +207,160 @@ describe("GET /map/state + /map/stream (injected store, no Mongo)", () => {
     },
     15_000,
   );
+
+  it(
+    "8c hotfix: a signup-state user (loc:null) is a valid row, never a 500 — absent from the dots on /map/state + /map/stream",
+    async () => {
+      const store = memoryStore();
+      await store.upsertHazard(hazardDoc(0));
+      await store.upsertResource(resourceDoc(Date.now()));
+      const deliver = memoryDeliverStore();
+      // Exactly the row signup writes while the address is unresolved ("hi" only).
+      const user: Omit<UserRecord, "id"> = {
+        phone: "+15557770001",
+        platform: "sms",
+        spaceId: "any;-;+15557770001",
+        lang: "en",
+        state: "asked-address",
+        loc: null,
+        zip: null,
+        consentText: true,
+        consentVoice: true,
+        addressAttempts: 0,
+        askedZip: false,
+        langConfirmPending: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await deliver.createUser(user);
+
+      const app = createApp(loadConfig({}), {
+        store: async () => store,
+        pipeline: async () => emptyPipelineResult(),
+        inbound: stubInboundRuntime(),
+        match: async () => emptyMatchStore(),
+        deliver: async () => deliver,
+        verify: async () => memoryVerifyStore(),
+        voice: stubVoiceRuntime(),
+        mesh: async () => memoryMeshStore(),
+      });
+
+      // The pipeline's briefable filter must ALREADY drop a null loc (verified — no change).
+      expect((await deliver.listBriefableUsers()).map((u) => u.phone)).not.toContain("+15557770001");
+
+      const res = await app.request("/map/state");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        hazards: unknown[];
+        resources: unknown[];
+        userDots: Array<{ lat: number; lon: number }>;
+        briefCount: number;
+      };
+      expect(body.hazards).toHaveLength(1);
+      expect(body.resources).toHaveLength(1);
+      expect(body.userDots).toHaveLength(0); // the null-loc user is simply absent, never a crash
+      expect(JSON.stringify(body)).not.toContain("+15557770001");
+
+      // /mesh/state rides the same store seam (Task 8b resources) and stays 200.
+      const mesh = await app.request("/mesh/state");
+      expect(mesh.status).toBe(200);
+      const meshBody = (await mesh.json()) as { resources: Array<{ sourceId: string }>; messages: unknown[] };
+      expect(meshBody.resources).toHaveLength(1);
+      expect(meshBody.messages).toEqual([]);
+    },
+  );
+});
+
+describe.skipIf(!process.env.MONGODB_URI)("real Mongo (8c): loc:null signup user never breaks the state reads", () => {
+  const phone = "+15550002001";
+  const hazard: HazardDoc = {
+    sourceId: "8c-hotfix-hazard",
+    type: "flood",
+    severity: 3,
+    title: "8c hotfix flood",
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-122.4, 47.5],
+          [-122.3, 47.5],
+          [-122.3, 47.6],
+          [-122.4, 47.5],
+        ],
+      ],
+    },
+    validFrom: Date.now() - 60_000,
+    validTo: Date.now() + 3_600_000,
+    source: "test",
+  };
+  const resource: ResourceDoc = {
+    sourceId: "8c-hotfix-shelter",
+    kind: "shelter",
+    name: "8c Shelter",
+    partner: false,
+    status: "open",
+    verifiedAt: Date.now(),
+    loc: { type: "Point", coordinates: [-122.33, 47.61] },
+  };
+
+  async function cleanup(db: Db) {
+    await db.collection(COLLECTIONS.users).deleteMany({ phone });
+    await db.collection(COLLECTIONS.hazards).deleteMany({ sourceId: hazard.sourceId });
+    await db.collection(COLLECTIONS.resources).deleteMany({ sourceId: resource.sourceId });
+  }
+
+  it("GET /map/state 200 with the null-loc user absent from the dots; GET /mesh/state 200", async () => {
+    const { defaultDeps } = await import("../src/deps.ts");
+    const config = loadConfig();
+    const deps = defaultDeps(config);
+    const app = createApp(config, deps);
+    const db = await getDb(config);
+    await cleanup(db);
+    await db.collection(COLLECTIONS.users).insertOne({
+      phone,
+      platform: "sms",
+      spaceId: "any;-;+15550002001",
+      lang: "en",
+      state: "asked-address",
+      loc: null,
+      zip: null,
+      consentText: true,
+      consentVoice: true,
+      addressAttempts: 0,
+      askedZip: false,
+      langConfirmPending: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as never);
+    const store = await deps.store(config);
+    await store.upsertHazard(hazard);
+    await store.upsertResource(resource);
+
+    const res = await app.request("/map/state");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { hazards: Array<{ sourceId: string }>; resources: Array<{ sourceId: string }> };
+    expect(body.hazards.map((h) => h.sourceId)).toContain("8c-hotfix-hazard");
+    expect(body.resources.map((r) => r.sourceId)).toContain("8c-hotfix-shelter");
+
+    // The dots are exactly the users with a resolvable loc — the null-loc signup row excluded.
+    const dots = await store.listUserDots();
+    const locatable = await db.collection(COLLECTIONS.users).countDocuments({ loc: { $ne: null } });
+    expect(dots).toHaveLength(locatable);
+    expect(await db.collection(COLLECTIONS.users).countDocuments({ phone })).toBe(1); // row still valid, untouched
+    expect(JSON.stringify(body)).not.toContain(phone);
+
+    const mesh = await app.request("/mesh/state");
+    expect(mesh.status).toBe(200);
+    const meshBody = (await mesh.json()) as { resources: Array<{ sourceId: string }> };
+    expect(meshBody.resources.map((r) => r.sourceId)).toContain("8c-hotfix-shelter");
+
+    await cleanup(db);
+    await closeDb();
+  }, 60_000);
+
+  afterAll(async () => {
+    const db = await getDb(loadConfig());
+    await cleanup(db);
+    await closeDb();
+  });
 });
