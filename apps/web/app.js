@@ -1215,8 +1215,26 @@
         state.queue.forEach((p) => { if (p.photoRef === ref) delete p.photoRef; });
         persist.queue();
         toast("photo too large — resending without it.", "warn");
+      } else if (r.status === 400 || r.status === 403) {
+        // permanent server refusal (validation 400, or the device isn't a
+        // signature-pinned uploader 403 — flushing already runs after the sync,
+        // so a 403 here won't self-heal on the next retry). Keep retrying it
+        // forever was the silent fail: the report synced, the photo just never
+        // landed and nobody heard about it. Drop it, strip the ref so the next
+        // sync stops advertising a photo that has no bytes, and SAY IT.
+        const reason = await r.json().then((j) => (j && j.error) || "").catch(() => "");
+        delete pending[ref];
+        lsSet(LS.photos, pending);
+        state.queue.forEach((p) => { if (p.photoRef === ref) delete p.photoRef; });
+        persist.queue();
+        toast(
+          r.status === 403
+            ? "this device can't upload photos (unsigned/not pinned) — the report went without it."
+            : "photo rejected" + (reason ? " (" + reason + ")" : "") + " — the report went without it.",
+          "warn",
+        );
       } else {
-        return;
+        return; // 5xx / anything odd — keep it pending, retry on the next sync
       }
       renderMeshBadge();
     }
@@ -1409,6 +1427,15 @@
           if (hz) openHazSheet(hz, brief);
         });
       });
+    }
+
+    // summary-card timing line (the #homeHaz div under "Current hazards · N active"):
+    // the brief arrives worst-first, so the top hazard's window is THE decision line
+    const homeHaz = $("#homeHaz", el);
+    if (homeHaz) {
+      const top = (brief.hazards || [])[0];
+      homeHaz.textContent = top ? String(top.timing || "") : "";
+      homeHaz.style.display = top && top.timing ? "" : "none"; // no ghost 5px gap on the all-clear card
     }
 
     // actions
@@ -3169,6 +3196,14 @@
       const api = $("#cfgApi", modal).value.trim().replace(/\/+$/, "");
       const tool = $("#cfgTool", modal).value.trim();
       const photon = $("#cfgPhoton", modal).value.trim();
+      const errEl = $("#cfgErr", modal); // rendered but previously never written — bad saves were silent
+      // a non-empty API base must be a real http(s) URL; a typo would otherwise
+      // strand the demo on relative paths that 404 forever
+      if (api && !/^https?:\/\/\S+$/.test(api)) {
+        errEl.textContent = "API base must be a full URL (https://…) — or left empty for the harness proxy.";
+        return;
+      }
+      errEl.textContent = "";
       state.cfg = {
         api,
         toolSecret: tool || state.cfg.toolSecret || "",

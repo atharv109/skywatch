@@ -287,6 +287,15 @@ summary{cursor:pointer;color:var(--accent);font-size:12px}
     ps.className = "chip " + cls;
     ps.textContent = label;
     if (j.__status === 200 && j.actions) botBrief(j);
+    // briefHead (rendered above briefBody, previously never filled): the one-line
+    // summary so a judge reads the brief state without expanding the raw JSON
+    $("briefHead").innerHTML = j.__status === 200 && j.actions
+      ? '<div class="row" style="margin-bottom:8px">' +
+        '<span class="chip ok">' + (j.hazards || []).length + " hazard(s)</span>" +
+        '<span class="chip gray">' + (j.actions || []).length + " actions</span>" +
+        (j.shelter ? '<span class="chip ok">shelter: ' + esc(j.shelter.name) + "</span>" : '<span class="chip gray">no verified shelter</span>') +
+        '<span class="chip gray">lang ' + esc(j.lang) + "</span></div>"
+      : "";
     if (j.__status === 200 && j.actions) {
       $("briefBody").innerHTML = '<details open><summary>raw brief JSON</summary><pre class="mono" style="white-space:pre-wrap">' + esc(JSON.stringify(j, null, 2)) + "</pre></details>";
     } else {
