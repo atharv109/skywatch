@@ -243,6 +243,36 @@ describe("GET /tools/brief/:userId + /tools/brief/byPhone/:platform/:phone", () 
   });
 });
 
+// The public read behind the shared text link: b.html fetches this so a judge/
+// partner can open it on a fresh phone. Same builder as /tools/brief/:userId,
+// keyed by the unguessable 24-hex user id alone (capability URL), read-only.
+describe("GET /b/:id/data (public share read)", () => {
+  it("serves the brief WITHOUT the secret even when TOOL_SECRET is set; the gated route still refuses", async () => {
+    const h = harness({ withRoad: true, liveTime: true, configEnv: { TOOL_SECRET: "demo-tool-secret" } });
+    const created = await h.dstore.createUser(userDoc());
+    const res = await h.app.request(`/b/${created.id}/data`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    const brief = (await res.json()) as UserBrief;
+    expect(brief.userId).toBe(created.id);
+    expect(brief.hazards).toHaveLength(1);
+    expect(JSON.stringify(brief)).not.toContain("15551239999"); // no identity in the share payload
+    expect(await h.dstore.listOutbox()).toHaveLength(0); // side-effect free
+    // the tool endpoint keeps its gate for the same id
+    expect((await h.app.request(`/tools/brief/${created.id}`)).status).toBe(401);
+  });
+
+  it("404s for unknown, malformed, and mid-signup (no loc) ids", async () => {
+    const h = harness({ liveTime: true });
+    await h.dstore.createUser(userDoc());
+    expect((await h.app.request("/b/0abcdef1234567890abcdef1/data")).status).toBe(404);
+    expect((await h.app.request("/b/not-a-real-id/data")).status).toBe(404); // unknown user
+    expect((await h.app.request("/b/x/data")).status).toBe(404); // too short — garbage guard
+    const partial = await h.dstore.createUser({ ...userDoc(), phone: "+15551230001", loc: null, state: "asked-address" });
+    expect((await h.app.request(`/b/${partial.id}/data`)).status).toBe(404);
+  });
+});
+
 // Task-4 code must never log a phone number: cheap grep-style audit over the new files.
 // Rule: no console.log/info at all, and console.* lines pass only static literals
 // (no template interpolation where a user identifier could sneak in).

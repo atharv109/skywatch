@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Config } from "../config.ts";
 import { defaultDeps, type AppDeps } from "../deps.ts";
+import { buildUserBrief } from "../brief/build.ts";
 import { scenarioRoutes } from "./scenario.ts";
 import { mapRoutes } from "./map.ts";
 import { webhookRoutes } from "./webhooks.ts";
@@ -29,6 +30,35 @@ export function routes(config: Config, deps: AppDeps = defaultDeps(config)): Hon
   app.route("/roads", roadRoutes(config, deps));
   app.route("/mesh", meshRoutes(config, deps));
   app.route("/demo", demoRoutes(config, deps));
+
+  /**
+   * GET /b/:id/data — the PUBLIC read behind the shared brief link (b.html). Same
+   * brief /tools/brief/:userId builds, but served WITHOUT the tool secret: the
+   * 24-hex user id is an unguessable capability URL and the payload holds hazards/
+   * shelter/actions for the user's area (no name, no phone). Read-only — no outbox
+   * row, rate gates untouched (same reasoning as the tool reads). This exists so a
+   * judge/partner can open the texted link on any phone; /tools/* stays gated.
+   */
+  app.get("/b/:id/data", async (c) => {
+    const id = c.req.param("id");
+    // Looser than the parent page route's hex check on purpose: this handler
+    // returns JSON (no HTML injection surface), and the hermetic memory store
+    // stamps ids as "mem-N" — only Mongo ObjectIds are hex. Still a garbage
+    // guard: word chars + dash only, length-bounded.
+    if (!/^[\w-]{4,64}$/.test(id)) return c.json({ error: "no such brief" }, 404);
+    try {
+      const deliver = await deps.deliver();
+      const user = await deliver.getUserById(id);
+      if (!user) return c.json({ error: "unknown user" }, 404);
+      if (!user.loc) return c.json({ error: "user has no resolved location" }, 404);
+      const match = await deps.match();
+      const brief = await buildUserBrief(match, { id: user.id, lang: user.lang, loc: user.loc }, Date.now());
+      return c.json(brief, 200, { "Cache-Control": "no-store" });
+    } catch (err) {
+      console.error("public brief data failed:", err instanceof Error ? err.message : err);
+      return c.json({ error: "brief unavailable" }, 503);
+    }
+  });
 
   /**
    * GET /b/:id — the mobile brief map-link page (demo mapLink, Task 8g): serves the

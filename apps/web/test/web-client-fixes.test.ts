@@ -61,3 +61,14 @@ describe("connection modal — save validates the API base through the #cfgErr l
     expect(modal).toContain("errEl.textContent =");
   });
 });
+
+describe("shared brief page (b.html) — opens on ANY phone", () => {
+  const bSrc = readFileSync(join(WEB, "b.html"), "utf8");
+  it("fetches the PUBLIC /b/:id/data read, not the secret-gated /tools/brief/:userId", () => {
+    // Regression: the share link 401-dead-ended for anyone without TOOL_SECRET
+    // (judges/partners on fresh phones). The public route is keyed by the
+    // unguessable user id; /tools stays gated (see api test/match.test.ts).
+    expect(bSrc).toContain('/b/" + encodeURIComponent(id) + "/data');
+    expect(bSrc).not.toContain('"/tools/brief/" + encodeURIComponent(id)');
+  });
+});

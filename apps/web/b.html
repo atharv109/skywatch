@@ -168,7 +168,7 @@
     failCard("This link is missing its id", "The brief link from your text should look like …/b/<id>");
   } else {
     skeleton();
-    var t0 = apiBase() + "/tools/brief/" + encodeURIComponent(id);
+    var t0 = apiBase() + "/b/" + encodeURIComponent(id) + "/data";
     fetch(t0, { headers: withSecret({ "Accept": "application/json" }) })
       .then(function (r) {
         if (r.status === 401) { failCard("This server checks the tool secret", "Open the Skywatch app → Profile → Connection details, save the server's TOOL_SECRET, and reopen this link."); return null; }
