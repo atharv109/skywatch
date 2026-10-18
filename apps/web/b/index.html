@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brief — Skywatch</title>
+<meta name="robots" content="noindex">
+<script>
+/* PUBLIC_BASE_URL + "/b/<userId>" lands here on any static server (dir index);
+ * hand the id to the real page via its query param. */
+(function () {
+  var m = location.pathname.match(/\/b\/([^/.]+)/);
+  var q = "?id=" + encodeURIComponent(m ? decodeURIComponent(m[1]) : "");
+  location.replace("../b.html" + q);
+})();
+</script>
+</head>
+<body>
+<p style="font-family:system-ui;color:#9CA3AF;max-width:520px;margin:80px auto">Opening the brief… <a style="color:#F97316" href="../b.html">continue</a></p>
+</body>
+</html>
