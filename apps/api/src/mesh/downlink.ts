@@ -90,7 +90,8 @@ export async function buildDownlink(
   // Task 8b messages: newest cap 20 — direct `to` the gateway's hash (anywhere), or
   // broadcast messages within the radius of the gateway's position.
   const gatewayHash = hashPrefix(gateway.deviceId);
-  const packets = await store.listPackets();
+  const [packets, photos] = await Promise.all([store.listPackets(), store.listPhotos()]);
+  const byRef = new Map(photos.map((p) => [p.photoRef, p] as const));
   const messages = packets
     .filter((p) => p.type === "msg")
     .filter(
@@ -101,7 +102,7 @@ export async function buildDownlink(
     )
     .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
     .slice(0, MESH_MSG_BUNDLE_CAP)
-    .map(messageView);
+    .map((p) => messageView(p, byRef));
   return {
     generatedAt: now,
     brief: fallbackRender(brief),

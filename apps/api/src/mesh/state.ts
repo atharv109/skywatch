@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { confidenceFor } from "../confidence.ts";
 import type { ResourceDoc } from "../types/docs.ts";
-import type { MeshBeaconDoc, MeshMessageView, MeshPacketDoc, MeshState } from "./types.ts";
+import type { MeshBeaconDoc, MeshMessageView, MeshPacketDoc, MeshPhotoDoc, MeshState } from "./types.ts";
 import type { MeshStore } from "./store.ts";
 
 /**
@@ -66,9 +66,21 @@ function displayedStatus(status: string, confidence: number): "open" | "unknown"
   return "unknown";
 }
 
-/** The read view of one msg packet (shared by /mesh/state and the downlink bundle). */
-export function messageView(p: MeshPacketDoc): MeshMessageView {
-  return { id: p.id, from: hashPrefix(p.deviceId), to: p.to, text: p.status, ts: p.ts, hops: p.hops };
+/** The read view of one msg packet (shared by /mesh/state and the downlink bundle). `photos` resolves its photoRef (review I1 fix: messages expose the photo pointer + resolved view). */
+export function messageView(p: MeshPacketDoc, photos: Map<string, MeshPhotoDoc>): MeshMessageView {
+  const photo = p.photoRef !== null ? photos.get(p.photoRef) : undefined;
+  return {
+    id: p.id,
+    from: hashPrefix(p.deviceId),
+    to: p.to,
+    text: p.status,
+    ts: p.ts,
+    hops: p.hops,
+    photoRef: p.photoRef,
+    hasPhoto: photo !== undefined,
+    photoKind: photo?.kind ?? null,
+    photoUrl: photo !== undefined ? `/mesh/photo/${p.photoRef}` : null,
+  };
 }
 
 export async function assembleMeshState(
@@ -140,7 +152,7 @@ export async function assembleMeshState(
     .filter((p) => p.type === "msg")
     .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
     .slice(0, 50)
-    .map(messageView);
+    .map((p) => messageView(p, byRef));
 
   // Task 8b resource pins: same compose as /map/state's resources (all non-road
   // resources ride the shelter half-life; displayedStatus applies read-time).

@@ -31,3 +31,11 @@ Status: COMPLETE on main, additive (8b/8c/8d untouched beyond seam extensions). 
 - Thumbnails are intentionally absent ("thumbnail-free" per spec) — dashboards fetch full ≤150 KB images, cache-immutable forever.
 - The satellite knob is env-only; turning it on in Render means real Atlas writes from the sync path at demo scale (bounded ≤36 upserts/sync).
 - No live satellite/network test exists against the real services (all network tests are scripted; the live path shares the exact ingest functions the REPLAY pipeline already exercises live).
+
+## Fix round 1 (review I1 — messages never carried photoRef)
+
+- `mesh/types.ts`: `MeshMessageView` gains `photoRef: string | null` + `hasPhoto/photoKind/photoUrl` (the same resolved-photo semantics as hazard reports).
+- `mesh/state.ts`: `messageView(p, photos)` now takes the photoRef→doc map (both callers supply it: assembleMeshState's byRef; buildDownlink lists mesh_photos once per bundle) — hazard-report semantics mirrored exactly: pointer always exposed, `hasPhoto/photoUrl` ONLY when the pointer resolves to uploaded bytes.
+- `mesh/downlink.ts`: bundle messages resolve photos the same way (one listPhotos call) — recipient devices can now render chat/directs photos.
+- Tests: new hermetic test (msg packet with photoRef → state message carries the pointer pre-upload with `hasPhoto:false`, and the full resolved view after `POST /mesh/photo` — mirrored in the bundle); the two 8b message-shape assertions updated for the additive keys (strict key-set + exact view object).
+- Verification: tsc clean; hermetic 208 total (199 passed + 9 gated-skip) — all green, no other behavior changed (gated run skipped per fix-round scope; the changed seam is read-only view shaping fully covered hermetically).

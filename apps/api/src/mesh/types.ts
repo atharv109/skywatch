@@ -233,6 +233,12 @@ export interface MeshMessageView {
   text: string;
   ts: number;
   hops: number;
+  /** Task 8e (review I1 fix): the message's photo POINTER — the chat/directs surfaces render from it. */
+  photoRef: string | null;
+  /** Task 8e photo semantics (same as hazard reports): hasPhoto/photoUrl only when the pointer RESOLVES to uploaded bytes. */
+  hasPhoto: boolean;
+  photoKind: MeshPhotoLabel | null;
+  photoUrl: string | null;
 }
 
 export interface MeshState {

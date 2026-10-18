@@ -462,6 +462,10 @@ describe("Task 8b: msg packets (mesh chat) + messages/resources read surfaces", 
       text,
       ts: NOW - 60_000,
       hops: 0,
+      photoRef: null, // 8e I1 fix: messages expose the photo pointer + resolved view
+      hasPhoto: false,
+      photoKind: null,
+      photoUrl: null,
     });
     expect(state.resources).toEqual([]); // no ResourceDocs seeded in this harness
     expect(state.hazardReports).toHaveLength(0);
@@ -499,7 +503,7 @@ describe("Task 8b: msg packets (mesh chat) + messages/resources read surfaces", 
     const later = await assembleMeshState(h.meshStore, NOW + 90 * 60_000);
     expect(later.messages.map((m) => m.text)).toEqual(["broadcast nearby", "broadcast far away", "direct to someone else", "direct to gateway"]);
     for (const m of later.messages) {
-      expect(Object.keys(m).sort()).toEqual(["from", "hops", "id", "text", "to", "ts"]);
+      expect(Object.keys(m).sort()).toEqual(["from", "hasPhoto", "hops", "id", "photoKind", "photoRef", "photoUrl", "text", "to", "ts"]);
     }
   });
 
@@ -918,6 +922,31 @@ describe("Task 8e: mesh photos + satellite overlay", () => {
     const syncedOff = (await (await syncPackets(hOff, GW, 47.6, -122.33, [packet(makeSigner(GW))])).json()) as SyncBody;
     expect(syncedOff.bundle.satellite).toBeUndefined();
     expect(guard).not.toHaveBeenCalled();
+  });
+
+  it("review I1 fix: msg messages expose photoRef, and hasPhoto/photoUrl only once (and exactly) the bytes land — in /mesh/state AND the bundle", async () => {
+    const h = harness();
+    const deviceId = "mesh-test-msg-photo-device";
+    const signer = makeSigner(deviceId);
+    // one device, one keypair: the hazard sync pins it, the msg rides the same key
+    await syncPackets(h, GW, 47.6, -122.33, [packet(signer, { type: "hazard", status: "signal check" })]);
+    await syncPackets(h, GW, 47.6, -122.33, [
+      packet(signer, { id: "mesh-test-msg-photo-1", type: "msg", status: "look at this flood", to: deviceHash(GW), photoRef: "mesh-test-msg-photo-r1" }),
+    ]);
+
+    // declared but NOT yet uploaded: the pointer rides, no resolved photo rendered
+    const before = (await (await h.app.request("/mesh/state")).json()) as { messages: Array<{ id: string; photoRef: string | null; hasPhoto: boolean; photoKind: string | null; photoUrl: string | null }> };
+    expect(before.messages[0]).toMatchObject({ id: "mesh-test-msg-photo-1", photoRef: "mesh-test-msg-photo-r1", hasPhoto: false, photoKind: null, photoUrl: null });
+
+    await postPhoto(h, { deviceId, photoRef: "mesh-test-msg-photo-r1", data: imageBytes(66).toString("base64"), label: "flood" });
+    const state = (await (await h.app.request("/mesh/state")).json()) as typeof before;
+    expect(state.messages[0]).toMatchObject({ photoRef: "mesh-test-msg-photo-r1", hasPhoto: true, photoKind: "flood", photoUrl: "/mesh/photo/mesh-test-msg-photo-r1" });
+
+    // the bundle (direct to the gateway's hash here) mirrors the same semantics
+    const bundle = await buildDownlink(h.meshStore, memoryMatchStore(h.astore), { deviceId: GW, lat: 47.6, lon: -122.33 }, NOW);
+    const inBundle = bundle.messages.find((m) => m.id === "mesh-test-msg-photo-1")!;
+    expect(inBundle.photoRef).toBe("mesh-test-msg-photo-r1");
+    expect(inBundle).toMatchObject({ hasPhoto: true, photoKind: "flood", photoUrl: "/mesh/photo/mesh-test-msg-photo-r1" });
   });
 });
 
