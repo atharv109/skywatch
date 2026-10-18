@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Skywatch</title>
+<meta name="description" content="Skywatch — neighborhood emergency briefs that keep working when the network doesn't.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="stage">
+  <div class="stage-copy" aria-hidden="true">
+    <div class="stage-mark">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v4.9c0 4.3-3.2 8.1-7.5 9.4-4.3-1.3-7.5-5.1-7.5-9.4V6.2L12 3z"/><path d="M12 8.5v4"/><path d="M12 15.4h.01"/></svg>
+      <span>Skywatch</span>
+    </div>
+    <h1>Emergency updates that keep working when the towers don't.</h1>
+    <p>A live simulation of the phone app. Pick a network mode in Profile — degrade offline, queue what matters, become the link.</p>
+    <div class="stage-cols">
+      <div><b>1</b><span>Online — briefs by text, one real signup.</span></div>
+      <div><b>2</b><span>Offline — mesh mode, reports queue up.</span></div>
+      <div><b>3</b><span>Gateway — sync the mesh, carry the bundle.</span></div>
+    </div>
+    <p class="stage-note">Talks to the real Skywatch API only — no mocks. <a href="index.html">harness</a></p>
+  </div>
+
+  <div class="phone" id="phone" data-mode="online">
+    <div class="phone-frame">
+      <div class="phone-buttons" aria-hidden="true"></div>
+
+      <!-- status bar (part of the app) -->
+      <header class="statusbar">
+        <span class="sb-time" id="sbTime">9:41</span>
+        <div class="sb-island" aria-hidden="true"></div>
+        <span class="sb-right">
+          <span class="sb-signal" id="sbSignal" aria-label="signal"></span>
+          <span class="sb-mode" id="sbMode">5G</span>
+          <span class="sb-batt" aria-hidden="true"><i></i></span>
+        </span>
+      </header>
+
+      <!-- mode banner -->
+      <div class="banner" id="banner" hidden>
+        <span class="banner-dot"></span>
+        <span class="banner-text" id="bannerText"></span>
+      </div>
+
+      <!-- screens -->
+      <main class="screens" id="screens">
+        <section class="screen active" id="screen-home" data-tab="home" role="tabpanel" aria-label="Home"></section>
+        <section class="screen" id="screen-map" data-tab="map" role="tabpanel" aria-label="Map">
+          <canvas id="mapCanvas" aria-label="Vector map of hazards, resources and the mesh layer"></canvas>
+          <div class="map-hud">
+            <div class="map-chips" id="mapChips"></div>
+            <div class="map-ctl">
+              <button id="mapZoomIn" class="map-btn" aria-label="Zoom in" type="button">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+              <button id="mapZoomOut" class="map-btn" aria-label="Zoom out" type="button">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+              </button>
+              <button id="mapRecenter" class="map-btn" aria-label="Recenter map" type="button">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+              </button>
+            </div>
+          </div>
+        </section>
+        <section class="screen" id="screen-mesh" data-tab="mesh" role="tabpanel" aria-label="Mesh"></section>
+        <section class="screen" id="screen-profile" data-tab="profile" role="tabpanel" aria-label="Profile"></section>
+      </main>
+
+      <!-- walkthrough chip -->
+      <button class="walk-chip" id="walkChip" type="button" hidden aria-label="What mode switching does">
+        <span>?</span> 3 things about switching modes
+      </button>
+
+      <!-- tab bar -->
+      <nav class="tabbar" id="tabbar" role="tablist" aria-label="Main tabs"></nav>
+
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+
+    <!-- overlays inside the phone -->
+    <div class="call-layer" id="callLayer" hidden></div>
+    <div class="sheet-scrim" id="sheetScrim" hidden></div>
+    <aside class="sheet" id="sheet" hidden></aside>
+    <div class="onboard" id="onboard" hidden></div>
+    <div class="modal-wrap" id="modalWrap" hidden><div class="modal" id="modal"></div></div>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+  </div>
+</div>
+<script src="app.js" defer></script>
+</body>
+</html>
