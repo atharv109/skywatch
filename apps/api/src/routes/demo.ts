@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { createHmac, randomUUID } from "node:crypto";
 import type { Config } from "../config.ts";
+import { briefToken } from "../brief/linkToken.ts";
 import type { AppDeps } from "../deps.ts";
 import { buildUserBrief } from "../brief/build.ts";
 import type { PhotonPlatform } from "../deliver/photon.ts";
@@ -101,7 +102,7 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
         state: user.state,
         lang: user.lang,
         brief,
-        mapLink: `${config.publicBaseUrl}/b/${user.id}`,
+        mapLink: `${config.publicBaseUrl}/b/${briefToken(config, user.id)}`,
       });
     } catch (err) {
       // NoMongoError / a store outage must never crash the handler (Hono would 500):

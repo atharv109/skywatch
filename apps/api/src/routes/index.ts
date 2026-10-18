@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "../config.ts";
 import { defaultDeps, type AppDeps } from "../deps.ts";
 import { buildUserBrief } from "../brief/build.ts";
+import { verifyBriefToken } from "../brief/linkToken.ts";
 import { scenarioRoutes } from "./scenario.ts";
 import { mapRoutes } from "./map.ts";
 import { webhookRoutes } from "./webhooks.ts";
@@ -34,18 +35,18 @@ export function routes(config: Config, deps: AppDeps = defaultDeps(config)): Hon
   /**
    * GET /b/:id/data — the PUBLIC read behind the shared brief link (b.html). Same
    * brief /tools/brief/:userId builds, but served WITHOUT the tool secret: the
-   * 24-hex user id is an unguessable capability URL and the payload holds hazards/
+   * HMAC-signed token (brief/linkToken.ts) is the capability and the payload holds hazards/
    * shelter/actions for the user's area (no name, no phone). Read-only — no outbox
    * row, rate gates untouched (same reasoning as the tool reads). This exists so a
    * judge/partner can open the texted link on any phone; /tools/* stays gated.
    */
   app.get("/b/:id/data", async (c) => {
-    const id = c.req.param("id");
-    // Looser than the parent page route's hex check on purpose: this handler
-    // returns JSON (no HTML injection surface), and the hermetic memory store
-    // stamps ids as "mem-N" — only Mongo ObjectIds are hex. Still a garbage
-    // guard: word chars + dash only, length-bounded.
-    if (!/^[\w-]{4,64}$/.test(id)) return c.json({ error: "no such brief" }, 404);
+    const token = c.req.param("id");
+    // Garbage guard (word chars + dash, length-bounded), then the signature:
+    // a bare or forged user id is a 404, indistinguishable from an unknown user.
+    if (!/^[\w-]{4,96}$/.test(token)) return c.json({ error: "no such brief" }, 404);
+    const id = verifyBriefToken(config, token);
+    if (!id) return c.json({ error: "no such brief" }, 404);
     try {
       const deliver = await deps.deliver();
       const user = await deliver.getUserById(id);
@@ -70,7 +71,7 @@ export function routes(config: Config, deps: AppDeps = defaultDeps(config)): Hon
    */
   app.get("/b/:id", (c) => {
     const id = c.req.param("id");
-    if (!/^[a-f0-9]{8,32}$/.test(id)) return c.json({ error: "no such brief" }, 404);
+    if (!/^[a-f0-9]{8,32}_[a-f0-9]{32}$/.test(id)) return c.json({ error: "no such brief" }, 404);
     let html: string;
     try {
       // import.meta.url-relative: resolves to apps/api/public/b.html on dev AND on

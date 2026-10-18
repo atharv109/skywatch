@@ -156,7 +156,7 @@ describe("Task 8g: POST /demo/signup (server-signed real signup path)", () => {
     expect(body.brief.hazards.map((h) => h.title)).toContain("8g smoke plume");
     expect(body.brief.shelter).not.toBeNull();
     expect(body.brief.shelter!.confidence).toBeGreaterThanOrEqual(0.5);
-    expect(body.mapLink).toBe(`https://demo.example/b/${body.userId}`);
+    expect(body.mapLink).toMatch(new RegExp(`^https://demo\.example/b/${body.userId}_[a-f0-9]{32}$`));
     // the outbox carries the bot's replies through the REAL send path (not_wired = Photon unset)
     const outbox = await h.dstore.listOutbox();
     expect(outbox.length).toBeGreaterThanOrEqual(1);
@@ -242,7 +242,7 @@ describe("Task 8g: POST /demo/area-brief (point brief from current map data, no 
 describe("Task 8g: GET /b/:id (brief map-link page, id-injected)", () => {
   it("serves the copied b.html with window.SKYWATCH_BRIEF_ID injected before </head>; a garbage id is a 404", async () => {
     const h = harness(); // route is static-file serving: no gate, no store involved
-    const id = "6f48aa91c2e77b3d5601a2bb";
+    const id = "6f48aa91c2e77b3d5601a2bb_0123456789abcdef0123456789abcdef";
     const res = await h.app.request(`/b/${id}`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");

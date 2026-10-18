@@ -27,6 +27,7 @@ import type { TtsCache } from "./grok-tts.ts";
 import { synthesize } from "./grok-tts.ts";
 import { sendOutbound, type SendContext } from "./send.ts";
 import { postCallSummary } from "./post_call_summary.ts";
+import { briefToken } from "../brief/linkToken.ts";
 
 export type VoiceVerifyResult = "ok" | "bad-signature" | "missing-header" | "stale-timestamp" | "no-secret";
 
@@ -120,7 +121,7 @@ async function sendPostCallSummary(
   const brief = await deps.deliver.lastBrief(user.id);
   if (!brief) return; // no alert interaction to summarize; the conversation note still stands
   const set = Boolean(process.env["PUBLIC_BASE_URL"]);
-  const text = postCallSummary(brief, user.id, set, deps.config.publicBaseUrl);
+  const text = postCallSummary(brief, briefToken(deps.config, user.id), set, deps.config.publicBaseUrl);
   // 8f: synthesize BEFORE the send (cache-read first); null = text-only row (no meta.audio).
   const audio = await synthesize(
     {

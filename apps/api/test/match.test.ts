@@ -1,3 +1,4 @@
+import { briefToken } from "../src/brief/linkToken.ts";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
 import { createApp } from "../src/server.ts";
@@ -250,7 +251,8 @@ describe("GET /b/:id/data (public share read)", () => {
   it("serves the brief WITHOUT the secret even when TOOL_SECRET is set; the gated route still refuses", async () => {
     const h = harness({ withRoad: true, liveTime: true, configEnv: { TOOL_SECRET: "demo-tool-secret" } });
     const created = await h.dstore.createUser(userDoc());
-    const res = await h.app.request(`/b/${created.id}/data`);
+    const tok = briefToken({ toolSecret: "demo-tool-secret" }, created.id);
+    const res = await h.app.request(`/b/${tok}/data`);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toContain("no-store");
     const brief = (await res.json()) as UserBrief;
@@ -262,6 +264,17 @@ describe("GET /b/:id/data (public share read)", () => {
     expect((await h.app.request(`/tools/brief/${created.id}`)).status).toBe(401);
   });
 
+  it("404s for a bare user id, a forged signature, and another user's signature", async () => {
+    const h = harness({ withRoad: true, liveTime: true, configEnv: { TOOL_SECRET: "demo-tool-secret" } });
+    const a = await h.dstore.createUser(userDoc());
+    const b = await h.dstore.createUser({ ...userDoc(), phone: "+15551230002" });
+    const sigB = briefToken({ toolSecret: "demo-tool-secret" }, b.id).split("_").pop();
+    expect((await h.app.request(`/b/${a.id}/data`)).status).toBe(404); // bare id is no longer a capability
+    expect((await h.app.request(`/b/${a.id}_${"0".repeat(32)}/data`)).status).toBe(404);
+    expect((await h.app.request(`/b/${a.id}_${sigB}/data`)).status).toBe(404); // B's sig on A's id
+    expect((await h.app.request(`/b/${briefToken({ toolSecret: "other-secret" }, a.id)}/data`)).status).toBe(404);
+  });
+
   it("404s for unknown, malformed, and mid-signup (no loc) ids", async () => {
     const h = harness({ liveTime: true });
     await h.dstore.createUser(userDoc());
@@ -269,7 +282,7 @@ describe("GET /b/:id/data (public share read)", () => {
     expect((await h.app.request("/b/not-a-real-id/data")).status).toBe(404); // unknown user
     expect((await h.app.request("/b/x/data")).status).toBe(404); // too short — garbage guard
     const partial = await h.dstore.createUser({ ...userDoc(), phone: "+15551230001", loc: null, state: "asked-address" });
-    expect((await h.app.request(`/b/${partial.id}/data`)).status).toBe(404);
+    expect((await h.app.request(`/b/${briefToken({ toolSecret: null }, partial.id)}/data`)).status).toBe(404);
   });
 });
 
