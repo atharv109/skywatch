@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     deviceId: body.deviceId,
     photoRef: body.photoRef,
     data: body.data,
-    label: typeof body.label === "string" ? body.label : "OTHER",
+    label: typeof body.label === "string" && body.label.length > 0 ? body.label : "other",
   });
   try {
     return Response.json(JSON.parse(upstream.text), { status: upstream.status });
