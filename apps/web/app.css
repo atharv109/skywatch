@@ -659,6 +659,8 @@ svg { flex: none; stroke-linecap: round; stroke-linejoin: round; }
   touch-action: pan-y;
 }
 .onboard::-webkit-scrollbar { display: none; }
+.ob-step { animation: stepIn 0.38s var(--ease); } /* each onboarding step visibly advances */
+@keyframes stepIn { from { opacity: 0; transform: translateY(12px); } }
 .onboard-brand { display: flex; align-items: center; gap: 9px; color: var(--text2); font-family: var(--fd); font-weight: 600; font-size: 14px; margin-bottom: auto; }
 .onboard-brand svg { color: var(--accent); }
 .ob-sms { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 16px; margin-top: 18px; }

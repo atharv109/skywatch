@@ -151,6 +151,53 @@
     active: "You're on Skywatch for your area. We'll message you here only when there's an urgent hazard nearby; reply STOP to opt out anytime.",
     stopNote: "You replied STOP. Consent is off and this number is removed — and by design, no reply follows.",
   };
+  /* "Already signed up over SMS?" — continue the REAL signup: POST /demo/brief
+   * {phone} (contract of apps/api/src/routes/demo.ts, Task 8h) and go straight
+   * to Home with the brief from Skywatch's live record. 404 = do the quick
+   * signup below. */
+  function resumeDemoBrief() {
+    const errEl = $("#obResumeErr", obEl);
+    const btn = $("#obResume", obEl);
+    const input = $("#obResumePhone", obEl);
+    let raw = String(input ? input.value : "").trim().replace(/[\s().-]/g, "");
+    if (!/^\+\d{11,15}$/.test(raw)) {
+      // tolerate a US number typed without the country code
+      if (/^1\d{10}$/.test(raw)) raw = "+" + raw;
+      else if (/^\d{10}$/.test(raw)) raw = "+1" + raw;
+    }
+    if (!/^\+\d{11,15}$/.test(raw)) {
+      if (errEl) { errEl.style.display = "block"; errEl.textContent = "That doesn't look like an E.164 phone — e.g. +14255550123."; }
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
+    if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+    apiFetch("/demo/brief", { method: "POST", body: { phone: raw, platform: "sms" }, timeoutMs: 9000 })
+      .catch(() => {
+        if (btn) { btn.disabled = false; btn.textContent = "Continue"; }
+        if (errEl) { errEl.style.display = "block"; errEl.textContent = "No signal here — try the resume once one of us gets signal, or do the quick signup below."; }
+        return null;
+      })
+      .then((result) => {
+        if (!result) return;
+        if (btn) { btn.disabled = false; btn.textContent = "Continue"; }
+        if (result.ok && result.json && result.json.userId) {
+          const j = result.json;
+          state.profile = Object.assign({}, state.profile, { phone: raw, platform: "sms", lang: j.lang || state.profile.lang, userId: j.userId, onboarded: true });
+          persist.profile();
+          if (j.userId) { state.cfg.userId = j.userId; lsSet(LS.cfg, state.cfg); }
+          if (j.brief) { state.brief = j.brief; state.briefNote = null; cacheData("brief", j.brief); }
+          state.flags.pendingDemoSignup = null; persist.flags();
+          obEl.hidden = true; state.ob = null;
+          toast("Resuming your real signup — brief from Skywatch's live record.", "ok");
+          renderHome();
+        } else if (result.status === 404) {
+          if (errEl) { errEl.style.display = "block"; errEl.textContent = "That phone isn't signed up yet — do the quick signup below."; }
+        } else {
+          if (errEl) { errEl.style.display = "block"; errEl.textContent = result.status === 403 || result.status === 404 ? "Demo brief reads are off on this server — continue with the quick signup below." : "The server answered " + (result.status || "offline") + " — quick signup below still works."; }
+        }
+      });
+  }
+
   const LANGS = [
     { code: "en", name: "English", phrase: "english" },
     { code: "es", name: "Español", phrase: "espanol por favor" },
@@ -765,9 +812,10 @@
   function renderOb() {
     const ob = state.ob;
     if (!ob) return;
+    obEl.scrollTop = 0; // each step lands at the top — the advance is visible
     const footer =
       ob.step === 0
-        ? `<button class="btn btn-primary btn-block" id="obNext">Continue</button>`
+        ? `<button class="btn btn-primary btn-block" id="obNext">Say hi and continue</button>`
         : ob.step === 2
           ? `<button class="btn btn-primary btn-block" id="obFinish">Turn on Skywatch</button>`
           : `<button class="btn btn-primary btn-block" id="obNext" disabled>Continue</button>`;
@@ -775,31 +823,48 @@
     if (ob.step === 0) {
       obEl.innerHTML = `
         <div class="onboard-brand"><img class="brand-mark" src="brand/logo.png" alt="" onerror="this.remove()"><span>Skywatch · SMS</span></div>
-        <div class="ob-sms">
-          <div class="ob-msgr"><div class="ob-msg me">hi</div></div>
-          <div class="ob-msgr"><div class="ob-msg bot">${esc(MIRRORED.welcome)}</div></div>
-          <p class="ob-hint">Replies arrive over SMS; in this demo read them here (same state machine, same copy).</p>
+        <div class="ob-step">
+          <div class="ob-sms">
+            <div class="ob-msgr"><div class="ob-msg me">hi</div></div>
+            <div class="ob-msgr"><div class="ob-msg bot">${esc(MIRRORED.welcome)}</div></div>
+            <p class="ob-hint">Replies arrive over SMS; in this demo read them here (same state machine, same copy).</p>
+          </div>
+          <div class="card" id="obResumeCard" style="margin-top:14px">
+            <b style="font-size:14px;font-family:var(--fd)">Already signed up over SMS?</b>
+            <p class="mini dim2" style="margin:4px 0 9px">Enter the phone you texted from — Skywatch continues where your real signup left off.</p>
+            <div style="display:flex;gap:8px">
+              <input id="obResumePhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 425 555 0100" style="flex:1;min-height:46px;padding:0 13px;background:var(--surface2);border:1px solid var(--line2);border-radius:13px;color:var(--text);font:inherit">
+              <button class="btn btn-ok" id="obResume" style="min-height:46px;padding:0 16px;font-weight:600">Continue</button>
+            </div>
+            <p class="mini" id="obResumeErr" style="margin-top:8px;color:var(--warn);display:none"></p>
+          </div>
+          <h2 style="margin-top:20px">Getting you set up</h2>
+          <p class="sub">Or do the quick signup — same flow the real SMS bot runs. Say hi, share where to watch, pick your language.</p>
         </div>
-        <h2>Getting you set up</h2>
-        <p class="sub">This demo signs you up through the real webhook your phone would hit. Say hi, share where to watch, pick your language.</p>
         <div class="ob-foot">${footer}</div>`;
       $("#obNext", obEl).addEventListener("click", async () => {
         haptic(8);
         const ok = await obSend("hi", MIRRORED.welcome);
         if (ok) { ob.step = 1; renderOb(); }
       });
+      $("#obResume", obEl).addEventListener("click", () => { haptic(8); resumeDemoBrief(); });
+      $("#obResumePhone", obEl).addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { haptic(8); resumeDemoBrief(); }
+      });
     } else if (ob.step === 1) {
       obEl.innerHTML = `
         <div class="onboard-brand"><img class="brand-mark" src="brand/logo.png" alt="" onerror="this.remove()"><span>Skywatch · SMS</span></div>
-        <h2>Where should we watch?</h2>
-        <p class="sub">Your home address or a 5-digit WA ZIP code — same question the bot texts you.</p>
-        <label class="fld" for="obAddr">Home address or WA ZIP</label>
-        <input id="obAddr" type="text" inputmode="text" autocomplete="street-address" placeholder="101 Yesler Way, Seattle, WA 98104">
-        <button class="btn btn-block" id="obAddrSend" style="margin-top:12px">${ICONS.send} Send as text</button>
-        <div id="obLangZone" style="display:none">
-          <h2 style="font-size:18px">Your language for alerts</h2>
-          <div class="lang-rows">
-            ${LANGS.map((l) => `<button class="lang-row" data-lang="${l.code}" data-phrase="${esc(l.phrase)}" aria-pressed="false"><span>${esc(l.name)}</span><small>${l.code.toUpperCase()}</small></button>`).join("")}
+        <div class="ob-step">
+          <h2>Where should we watch?</h2>
+          <p class="sub">Your home address or a 5-digit WA ZIP code — same question the bot texts you.</p>
+          <label class="fld" for="obAddr">Home address or WA ZIP</label>
+          <input id="obAddr" type="text" inputmode="text" autocomplete="street-address" placeholder="101 Yesler Way, Seattle, WA 98104">
+          <button class="btn btn-block" id="obAddrSend" style="margin-top:12px">${ICONS.send} Send as text</button>
+          <div id="obLangZone" style="display:none">
+            <h2 style="font-size:18px">Your language for alerts</h2>
+            <div class="lang-rows">
+              ${LANGS.map((l) => `<button class="lang-row" data-lang="${l.code}" data-phrase="${esc(l.phrase)}" aria-pressed="false"><span>${esc(l.name)}</span><small>${l.code.toUpperCase()}</small></button>`).join("")}
+            </div>
           </div>
         </div>
         <div class="ob-foot">${footer}</div>`;
@@ -832,16 +897,18 @@
     } else {
       obEl.innerHTML = `
         <div class="onboard-brand"><img class="brand-mark" src="brand/logo.png" alt="" onerror="this.remove()"><span>Skywatch · SMS</span></div>
-        <h2>Consent, on the record</h2>
-        <p class="sub">Consent for texts and voice was granted with your first message — Skywatch records it that way, so it can call you during something bigger.</p>
-        <div class="consent-card">
-          <div class="consent-row">
-            <div style="flex:1"><b style="font-size:14px">Emergency text alerts</b><p>Sent only for an urgent hazard inside your area.</p></div>
-            <button class="switch" id="swText" aria-pressed="true" aria-label="Emergency text alerts"></button>
-          </div>
-          <div class="consent-row">
-            <div style="flex:1"><b style="font-size:14px">Voice check-in calls</b><p>A brief voice call when hazards are active near you.</p></div>
-            <button class="switch" id="swVoice" aria-pressed="true" aria-label="Voice check-in calls"></button>
+        <div class="ob-step">
+          <h2>Consent, on the record</h2>
+          <p class="sub">Consent for texts and voice was granted with your first message — Skywatch records it that way, so it can call you during something bigger.</p>
+          <div class="consent-card">
+            <div class="consent-row">
+              <div style="flex:1"><b style="font-size:14px">Emergency text alerts</b><p>Sent only for an urgent hazard inside your area.</p></div>
+              <button class="switch" id="swText" aria-pressed="true" aria-label="Emergency text alerts"></button>
+            </div>
+            <div class="consent-row">
+              <div style="flex:1"><b style="font-size:14px">Voice check-in calls</b><p>A brief voice call when hazards are active near you.</p></div>
+              <button class="switch" id="swVoice" aria-pressed="true" aria-label="Voice check-in calls"></button>
+            </div>
           </div>
         </div>
         <div class="ob-foot">${footer}</div>`;
