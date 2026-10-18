@@ -22,6 +22,8 @@ SKYWATCH_API_URL=https://your.onrender.com PORT=9999 node apps/web/server.mjs   
 # or: npx serve apps/web -l 4444          # static only; cross-origin API calls then hit the API's lack of CORS headers
 ```
 
+**On deploy** no harness proxy is needed: the `@skywatch/api` build runs `scripts/copy-web.mjs`, copying this directory to `apps/api/public/`, and the API serves it same-origin (`/`, `/app.html`, `/ops.html`, sims, `sw.js`, manifest + icons). `app.html` is PWA-installable — open the Render URL → Add to Home Screen.
+
 No apps/api files were touched by this work.
 
 ## Real frontend should carry vs harness-only

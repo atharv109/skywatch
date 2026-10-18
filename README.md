@@ -2,7 +2,7 @@
 
 Backend for Skywatch — DubHacks '26. Public hazard data -> one household, one language, one verified shelter.
 
-Monorepo: `apps/api` (this backend, fully built), `apps/web` + `apps/vision` (placeholder teammates' surfaces). Node 20, TypeScript, Hono, native `mongodb` driver, vitest.
+Monorepo: `apps/api` (this backend, fully built), `apps/web` + `apps/vision` (placeholder teammates' surfaces). Node 20, TypeScript, Hono, native `mongodb` driver, vitest. On deploy, `apps/api`'s build also copies `apps/web` to `apps/api/public/` and serves it same-origin, so the PWA demo app installs on phones straight from the Render URL.
 
 ## Architecture
 

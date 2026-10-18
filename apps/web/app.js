@@ -224,6 +224,7 @@
   let liveStreak = 0;     // consecutive /health 200s while OFFLINE (flip needs 2 of 2)
   let gwInFlight = false; // a /mesh/sync POST is mid-flight — don't race it into ONLINE
   let healthTimer = null;
+  const net = { probeMs: null, probeOk: null }; // last /health latency (Profile → Connection)
 
   function startHealthRetry() {
     stopHealthRetry();
@@ -281,10 +282,16 @@
   }
 
   async function probeHealth() {
+    const t0 = performance.now();
     try {
       const r = await fetch(apiBase() + "/health", { signal: timeoutSig(3500) });
+      net.probeMs = Math.round(performance.now() - t0);
+      net.probeOk = r.ok;
       return r.ok;
-    } catch (_e) { return false; }
+    } catch (_e) {
+      net.probeOk = false; // keep the last ms — display shows "no answer", not a fake number
+      return false;
+    }
   }
 
   /* small transient chip inside the status bar — e.g. "Gateway" flashes there
@@ -2150,7 +2157,8 @@
 
         <div class="sec-label">Connection</div>
         <div class="card">
-          <div class="kv"><span class="k">API</span><span class="v">${esc(apiBase() || "same-origin via the harness proxy")}</span></div>
+          <div class="kv"><span class="k">API</span><span class="v">${esc(apiBase() || location.origin)}</span></div>
+          <div class="kv"><span class="k">health</span><span class="v" id="netHealth">${net.probeOk == null ? "probing…" : net.probeOk ? `<span style="color:var(--ok)">ok</span> ${esc(String(net.probeMs))} ms` : '<span style="color:var(--danger)">no answer</span>'}</span></div>
           <div class="kv"><span class="k">TOOL_SECRET</span><span class="v">${state.cfg.toolSecret ? "set" : "not set"}</span></div>
           <div class="kv"><span class="k">webhook secret</span><span class="v">${state.cfg.photonSecret ? "set" : "not set"}</span></div>
           <button class="btn btn-ghost btn-block" id="cfgBtn" style="margin-top:10px;min-height:42px">Edit connection details</button>
@@ -2195,6 +2203,15 @@
     $("#simCallBtn", el).addEventListener("click", () => startCall());
     $("#cfgBtn", el).addEventListener("click", openConfigModal);
     $("#locBtn", el).addEventListener("click", askGeolocate);
+
+    // one fresh measurement for the Connection card while it's on screen
+    void probeHealth().then(() => {
+      const v = $("#netHealth", el);
+      if (!v) return;
+      v.innerHTML = net.probeOk
+        ? '<span style="color:var(--ok)">ok</span> ' + esc(String(net.probeMs)) + " ms"
+        : '<span style="color:var(--danger)">no answer</span>';
+    });
   }
 
   async function doStop() {

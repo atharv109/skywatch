@@ -1,5 +1,6 @@
 .env
 node_modules/
 dist/
+apps/api/public/
 *.log
 .DS_Store

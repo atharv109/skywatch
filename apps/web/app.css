@@ -25,7 +25,7 @@
   --fb: system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --shadow-card: 0 10px 24px -14px rgba(0, 0, 0, 0.55);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 14px 32px -18px rgba(0, 0, 0, 0.62);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -38,6 +38,8 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
 }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
@@ -47,7 +49,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-svg { flex: none; }
+svg { flex: none; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---------- stage + desktop phone frame ---------- */
 .stage {
@@ -160,6 +162,13 @@ svg { flex: none; }
 #phone[data-mode="offline"] .statusbar { background: linear-gradient(rgba(164, 148, 242, 0.14), transparent); }
 #phone[data-mode="gateway"] .statusbar { background: linear-gradient(rgba(111, 165, 245, 0.13), transparent); }
 
+/* installed standalone: real device chrome replaces the simulated frame's insets
+   (placed after the ≤520px statusbar/tabbar overrides so it wins the cascade) */
+@media (display-mode: standalone) {
+  .statusbar { height: 66px; padding-top: calc(14px + env(safe-area-inset-top)); }
+  .tabbar { padding-bottom: max(22px, calc(env(safe-area-inset-bottom) + 12px)); }
+}
+
 /* ---------- banner ---------- */
 .banner {
   z-index: 28; flex: none;
@@ -200,8 +209,8 @@ svg { flex: none; }
 
 .pad-b { padding-bottom: 6px; }
 .sec-label {
-  font-family: var(--fd); font-weight: 700; letter-spacing: -0.01em;
-  font-size: 19px; color: var(--text); margin: 22px 0 10px;
+  font-family: var(--fd); font-weight: 700; letter-spacing: -0.02em;
+  font-size: 19px; color: var(--text); margin: 24px 0 10px;
 }
 .sec-label small { display: block; font-family: var(--fb); font-weight: 400; font-size: 12.5px; color: var(--text3); margin-top: 2px; letter-spacing: 0; }
 .sec-label:first-child { margin-top: 4px; }
@@ -209,7 +218,7 @@ svg { flex: none; }
 /* ---------- shared cards + chips ---------- */
 .card {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 17px; padding: 15px;
+  border-radius: 18px; padding: 16px;
   box-shadow: var(--shadow-card);
 }
 .card + .card { margin-top: 10px; }
@@ -267,12 +276,13 @@ svg { flex: none; }
 @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
 .empty {
-  border: 1px dashed var(--line2); border-radius: 17px;
-  padding: 26px 18px; text-align: center; color: var(--text3);
+  border: 1px dashed var(--line2); border-radius: 18px;
+  padding: 30px 20px; text-align: center; color: var(--text3);
+  background: rgba(255, 255, 255, 0.015);
 }
-.empty svg { color: var(--text3); opacity: 0.7; }
-.empty b { display: block; color: var(--text2); font-weight: 600; margin: 10px 0 4px; }
-.empty p { font-size: 12.5px; max-width: 30ch; margin: 0 auto; }
+.empty svg { color: var(--text3); opacity: 0.7; width: 26px; height: 26px; margin: 0 auto; }
+.empty b { display: block; color: var(--text2); font-weight: 600; font-size: 14px; margin: 10px 0 4px; }
+.empty p { font-size: 12.5px; line-height: 1.55; max-width: 30ch; margin: 0 auto; }
 
 /* ---------- tab bar ---------- */
 .tabbar {
