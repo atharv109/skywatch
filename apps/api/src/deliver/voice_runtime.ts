@@ -8,6 +8,7 @@ import { getDb } from "../db/client.ts";
 import { createInboundQueue } from "./queue.ts";
 import { mongoDeliverStore, type DeliverStore } from "./store.ts";
 import { mongoVerifyStore } from "../verify/store.ts";
+import { mongoTtsCache, type TtsCache } from "./grok-tts.ts";
 import { outcomeFor, processVoiceOutcome, verifyVoiceWebhook, type VoiceVerifyResult, type VoicePostCallPayload } from "./voice.ts";
 
 export interface VoiceRuntime {
@@ -18,22 +19,29 @@ export interface VoiceRuntime {
   drain(): Promise<void>;
 }
 
+/**
+ * Every store is optional — a landed test harness overriding one does not disturb
+ * the defaults. Task 8f: `ttsCache` rides to processVoiceOutcome (the post-call
+ * summary's Grok TTS audio); unset = no cached audio is read/written (features
+ * degrade to null, the text path is unaffected).
+ */
 export function createVoiceRuntime(
   config: Config,
   stores: {
-    deliver: () => Promise<DeliverStore>;
-    verify: () => Promise<import("../verify/store.ts").VerifyStore>;
-  } = {
-    deliver: () => getDb(config).then(mongoDeliverStore),
-    verify: () => getDb(config).then(mongoVerifyStore),
-  },
+    deliver?: () => Promise<DeliverStore>;
+    verify?: () => Promise<import("../verify/store.ts").VerifyStore>;
+    ttsCache?: () => Promise<TtsCache>;
+  } = {},
 ): VoiceRuntime {
+  const deliverOf = stores.deliver ?? (() => getDb(config).then(mongoDeliverStore));
+  const verifyOf = stores.verify ?? (() => getDb(config).then(mongoVerifyStore));
   const queue = createInboundQueue<VoicePostCallPayload>(
     async (payload) => {
       await processVoiceOutcome(payload, {
         config,
-        deliver: await stores.deliver(),
-        verify: await stores.verify(),
+        deliver: await deliverOf(),
+        verify: await verifyOf(),
+        ...(stores.ttsCache ? { ttsCache: stores.ttsCache } : {}),
         now: Date.now(),
       });
     },

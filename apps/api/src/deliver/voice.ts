@@ -23,6 +23,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Config } from "../config.ts";
 import type { DeliverStore, UserRecord } from "./store.ts";
 import type { VerifyStore } from "../verify/store.ts";
+import type { TtsCache } from "./grok-tts.ts";
+import { synthesize } from "./grok-tts.ts";
 import { sendOutbound, type SendContext } from "./send.ts";
 import { postCallSummary } from "./post_call_summary.ts";
 
@@ -103,9 +105,15 @@ export const POST_CALL_SUMMARY_RATE_KEY = "post-call-summary";
  * Deterministic summary send (no Gemini): consent-checked, skipped when the
  * conversation carries no lastBrief. Never throws — sendOutbound records
  * (not_wired/failed) instead, the routing result is unaffected.
+ *
+ * Task 8f (Grok Voice TTS, SpaceX track): when XAI_API_KEY is set and the user's
+ * lang is /v1/tts-supported, the summary TEXT is ALSO synthesized to mp3 (5 s
+ * timeout, any failure -> null, deliver NEVER blocks) and the outbox row's meta
+ * carries {sha, lang, summaryText} — GET /tools/summary-audio/:outboxId plays it.
+ * Tagalog / no key / a slow Grok = silence: the text path above is untouched.
  */
 async function sendPostCallSummary(
-  deps: { config: Config; deliver: DeliverStore; now: number },
+  deps: { config: Config; deliver: DeliverStore; now: number; ttsCache?: () => Promise<TtsCache> },
   user: UserRecord,
 ): Promise<void> {
   if (!user.consentText) return; // STOP/revoked: nothing sent (Global Constraint 3)
@@ -113,8 +121,20 @@ async function sendPostCallSummary(
   if (!brief) return; // no alert interaction to summarize; the conversation note still stands
   const set = Boolean(process.env["PUBLIC_BASE_URL"]);
   const text = postCallSummary(brief, user.id, set, deps.config.publicBaseUrl);
+  // 8f: synthesize BEFORE the send (cache-read first); null = text-only row (no meta.audio).
+  const audio = await synthesize(
+    {
+      config: deps.config,
+      ...(deps.ttsCache ? { cache: await deps.ttsCache() } : {}),
+    },
+    text,
+    user.lang,
+  );
+  const meta = audio
+    ? { lang: user.lang, source: "fallback" as const, brief, audio: { sha: audio.sha, lang: user.lang, summaryText: text } }
+    : undefined;
   const ctx: SendContext = { config: deps.config, store: async () => deps.deliver, now: () => deps.now };
-  await sendOutbound(ctx, user, text, "alert", POST_CALL_SUMMARY_RATE_KEY);
+  await sendOutbound(ctx, user, text, "alert", POST_CALL_SUMMARY_RATE_KEY, meta);
 }
 
 /**
@@ -128,7 +148,7 @@ async function sendPostCallSummary(
  */
 export async function processVoiceOutcome(
   payload: VoicePostCallPayload,
-  deps: { config: Config; deliver: DeliverStore; verify: VerifyStore; now: number },
+  deps: { config: Config; deliver: DeliverStore; verify: VerifyStore; now: number; ttsCache?: () => Promise<TtsCache> },
 ): Promise<{ matched: "user" | "verify_request" | "none" }> {
   if (payload.type === "call_initiation_failure") return processCallFailure(payload, deps);
   const data = payload.data;

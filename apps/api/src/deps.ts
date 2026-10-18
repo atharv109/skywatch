@@ -10,6 +10,7 @@ import { createInboundContext, createInboundRuntime, type InboundRuntime } from 
 import { createVoiceRuntime, type VoiceRuntime } from "./deliver/voice_runtime.ts";
 import { mongoVerifyStore, type VerifyStore } from "./verify/store.ts";
 import { mongoMeshStore, type MeshStore } from "./mesh/store.ts";
+import { mongoTtsCache, type TtsCache } from "./deliver/grok-tts.ts";
 
 /**
  * Injectable dependencies for the route groups. The defaults go to Mongo via the
@@ -37,6 +38,13 @@ export interface AppDeps {
    * always wires it.
    */
   mesh?: () => Promise<MeshStore>;
+  /**
+   * Task 8f Grok Voice TTS cache (tts_cache). OPTIONAL on the interface so every
+   * landed hermetic harness stays untouched — deliver reads a missing cache as
+   * "no audio" (synthesize still runs without cache persistence); the production
+   * defaultDeps always wires it.
+   */
+  ttsCache?: () => Promise<TtsCache>;
 }
 
 export function defaultDeps(config: Config): AppDeps {
@@ -47,7 +55,7 @@ export function defaultDeps(config: Config): AppDeps {
     match: () => getDb(config).then(mongoMatchStore),
     deliver: () => getDb(config).then(mongoDeliverStore),
     verify: () => getDb(config).then(mongoVerifyStore),
-    voice: createVoiceRuntime(config),
+    voice: createVoiceRuntime(config, { ttsCache: () => getDb(config).then(mongoTtsCache) }),
     mesh: () => getDb(config).then(mongoMeshStore),
   };
 }

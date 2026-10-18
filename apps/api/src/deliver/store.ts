@@ -57,6 +57,8 @@ export interface OutboxMeta {
   lang: Lang;
   source: "gemini" | "fallback";
   brief: UserBrief;
+  /** Task 8f: Grok Voice TTS recap audio — sha is the tts_cache key; absent = no audio was synthesized (text-only path). */
+  audio?: { sha: string; lang: Lang; summaryText: string };
 }
 
 /**
@@ -64,6 +66,8 @@ export interface OutboxMeta {
  * (send.ts) reads back `kind: "alert"` rows by userId + rateKey.
  */
 export interface OutboxRecord {
+  /** Task 8f: the row's immutable id (Mongo _id / a memory-stamped id) — the /tools/summary-audio route's handle. */
+  id?: string;
   userId: string;
   kind: OutboxKind;
   /** e.g. hazard sourceId or "scenario:type"; null for plain replies. */
@@ -103,8 +107,10 @@ export interface DeliverStore {
    * pipeline has not briefed this user (hold-the-line reply, never the tool loop).
    */
   lastBrief(userId: string): Promise<UserBrief | null>;
-  /** Last `limit` conversation turns for a user, oldest-first (chat history). */
+  /** Newest `limit` conversation turns for a user, oldest-first (chat history). */
   recentConversation(userId: string, limit: number): Promise<ConversationEntry[]>;
+  /** Task 8f: one outbox row by its immutable id (Mongo _id / memory-stamped); null = not found (malformed ids read as not-found, never throw). */
+  getOutboxRow(id: string): Promise<OutboxRecord | null>;
   /**
    * Users the match pipeline briefs: active signup state, consent granted (both
    * flags), and a resolved location. Task 4 pipeline + per-user brief matching.
@@ -150,6 +156,7 @@ function docToConversation(doc: Record<string, unknown>): ConversationEntry {
 
 function docToRecord(doc: Record<string, unknown>): OutboxRecord {
   return {
+    id: doc["_id"] === undefined ? undefined : String(doc["_id"]),
     userId: String(doc["userId"]),
     kind: doc["kind"] as OutboxKind,
     rateKey: (doc["rateKey"] ?? null) as string | null,
@@ -238,6 +245,15 @@ export function mongoDeliverStore(db: Db): DeliverStore {
         .map(docToConversation)
         .reverse();
     },
+    async getOutboxRow(id) {
+      // A malformed/foreign id must read as "not found", not throw (getUserById pattern).
+      try {
+        const doc = await outbox.findOne({ _id: new ObjectId(id) });
+        return doc ? docToRecord(doc) : null;
+      } catch {
+        return null;
+      }
+    },
     async listOutbox() {
       const docs = await outbox.find().toArray();
       return docs.map(docToRecord);
@@ -285,7 +301,9 @@ export function memoryDeliverStore(): DeliverStore {
       convos.push({ ...entry });
     },
     async appendOutbox(record) {
-      sent.push({ ...record });
+      // Stamp the row's immutable id in the in-memory store too (the interface's
+      // getOutboxRow handle — Mongo rows carry their own _id).
+      sent.push({ ...record, id: `mem-outbox-${nextId++}` });
     },
     async lastOutboxAlert(userId, rateKey, since) {
       let best: OutboxRecord | null = null;
@@ -308,6 +326,9 @@ export function memoryDeliverStore(): DeliverStore {
     async recentConversation(userId, limit) {
       const mine = convos.filter((entry) => entry.userId === userId);
       return mine.slice(Math.max(0, mine.length - limit));
+    },
+    async getOutboxRow(id) {
+      return sent.find((r) => r.id === id) ?? null;
     },
     async listOutbox() {
       return [...sent];

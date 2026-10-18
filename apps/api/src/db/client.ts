@@ -24,6 +24,8 @@ export const COLLECTIONS = {
   meshDevices: "mesh_devices",
   /** Task 8e mesh photos (gateway-uploaded bytes; unique photoRef). */
   meshPhotos: "mesh_photos",
+  /** Task 8f Grok Voice TTS mp3 cache (key = sha256(text+lang), unique). */
+  ttsCache: "tts_cache",
 } as const;
 
 let client: MongoClient | null = null;
@@ -123,5 +125,10 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Task 8e photos: photoRef is the dedup key (idempotent gateway retries overwrite).
   await db.collection(COLLECTIONS.meshPhotos).createIndexes([
     { key: { photoRef: 1 }, name: "photoRef_1", unique: true },
+  ]);
+  // Task 8f TTS cache: sha256(text+lang) is the immutable cache key (content is
+  // deterministic mp3 — immutable forever, upsert-once semantics).
+  await db.collection(COLLECTIONS.ttsCache).createIndexes([
+    { key: { key: 1 }, name: "key_1", unique: true },
   ]);
 }

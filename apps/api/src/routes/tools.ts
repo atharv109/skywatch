@@ -69,5 +69,33 @@ export function toolRoutes(config: Config, deps: AppDeps): Hono {
     }
   });
 
+  /**
+   * Task 8f: the cached Grok Voice mp3 of a user's post-call summary recap, by
+   * OUTBOX ROW id (the dashboard links it from outbox views). Streams the bytes
+   * (immutable — a sha-keyed cache row is deterministic); nothing cached/absent
+   * = 404. Same tool-secret posture as the brief reads.
+   */
+  app.get("/summary-audio/:outboxId", async (c) => {
+    if (deniedFor(c.req.header())) return c.json({ error: "missing or wrong tool secret" }, 401);
+    try {
+      const deliver = await deps.deliver();
+      const row = await deliver.getOutboxRow(c.req.param("outboxId"));
+      const sha = row?.meta?.audio?.sha ?? null;
+      if (!sha) return c.json({ error: "no summary audio for this outbox row" }, 404);
+      // No ttsCache dep wired (hermetic harnesses) = nothing to serve.
+      if (!deps.ttsCache) return c.json({ error: "summary audio cache not configured" }, 503);
+      const cached = await (await deps.ttsCache()).get(sha);
+      if (!cached) return c.json({ error: "no such summary audio" }, 404);
+      return c.body(Buffer.from(cached.bytes, "base64"), 200, {
+        "Content-Type": cached.contentType,
+        // sha-keyed content is deterministic mp3 — immutable forever.
+        "Cache-Control": "public, max-age=31536000, immutable",
+      });
+    } catch (err) {
+      console.error("tools/summary-audio failed:", err instanceof Error ? err.message : err);
+      return c.json({ error: "summary audio unavailable" }, 503);
+    }
+  });
+
   return app;
 }
