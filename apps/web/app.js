@@ -14,7 +14,11 @@
  *
  * Network mode (the core concept): online → offline (user-triggered or auto on
  * fetch failure) → gateway (queued packets POST /mesh/sync, downlink bundle is
- * rebroadcast) → back online. Queued packets sign via WebCrypto Ed25519 exactly
+ * rebroadcast) → back online. AUTO-detect is the default state machine: window
+ * online/offline events + a ~5 s /health liveness loop while dark drive the
+ * transitions (OFFLINE + signal → auto-Gateway sync → /health OK → ONLINE);
+ * a manual Profile pick sets netOverride and overrides the detector while set.
+ * Queued packets sign via WebCrypto Ed25519 exactly
  * per src/mesh/sig.ts: msg = `id|type|ts|lat|lon|deviceId`, base64 raw key+sig,
  * TOFU pinning; deviceId = 10-hex sha256 prefix of the RAW pubkey (per-session
  * identity — reload = new neighbor).
@@ -109,6 +113,7 @@
   const state = {
     mode: "online",            // 'online' | 'offline' | 'gateway'
     autoOff: false,            // true = we degraded automatically (auto restore applies)
+    netOverride: null,         // null = AUTO-detect; 'online'|'offline'|'gateway' = manual pin
     cfg: null, profile: null, queue: [], thread: [], flags: {}, loc: null,
     cache: lsGet(LS.cache, {}),   // { brief, mapState, mesh } → {data, at}
     brief: null, mapState: null, meshState: null,
@@ -141,6 +146,8 @@
     { code: "ar", name: "العربية (Arabic)", phrase: "عربي" },
   ];
   const LANG_NAMES = { en: "English", es: "Español", zh: "中文", tl: "Tagalog", vi: "Tiếng Việt", ar: "العربية" };
+  /* Ask Skywatch quick prompts — answers are deterministic, built from brief facts only */
+  const ASKS = ["is the shelter still open?", "where do I go?", "what's the air like?"];
 
   /* =========================================================================
    * mode switching (THE core concept)
@@ -161,10 +168,11 @@
   /** ONLINE fetch failed → degrade for real. */
   function degrade(reason) {
     if (state.mode !== "online") return;
+    state.netOverride = null; // a real outage hands control back to AUTO
     setMode("offline", { auto: true, quiet: false, reason });
-    state.autoOff = true;
-    startHealthRetry();
   }
+
+  function isAutoNet() { return state.netOverride === null; }
 
   function setMode(mode, opts) {
     opts = opts || {};
@@ -182,28 +190,52 @@
       persist.flags();
       toast("New reports queue locally and send when one of us gets signal.", "mesh");
     } else if (mode === "gateway") {
-      showBanner("You have signal — carrying the mesh's messages up.", "gw", true);
+      showBanner(opts.source === "auto" ? "Signal found — syncing the mesh…" : "You have signal — carrying the mesh's messages up.", "gw", true);
+      if (opts.source === "auto") flashStatusChip("Gateway", "mesh");
     } else if (mode === "online") {
       bannerEl.hidden = false;
-      showBanner(opts.quiet ? "Signal restored." : "Back online — syncing your brief.", "ok");
+      showBanner(opts.fromGateway ? "Back online — everyone's news is out." : opts.quiet ? "Signal restored." : "Back online — syncing your brief.", "ok");
       restoreOnline(opts);
     }
     phoneEl.dataset.mode = mode;
     renderAll();
     if (mode === "gateway") void safe(syncGateway()).then(renderMesh);
+    if (mode === "offline" || mode === "gateway") startHealthRetry();
   }
 
+  /* AUTO detection — one state machine drives the status bar: window
+   * online/offline events + the /health liveness loop (below) while dark.
+   * OFFLINE + 2 consecutive /health 200s (or an `online` event) → auto-Gateway
+   * (sync the whole queue); GATEWAY, manual or auto, + /health OK → back ONLINE.
+   * A manual Profile pick (state.netOverride) overrides all of it while set. */
+  let liveStreak = 0;     // consecutive /health 200s while OFFLINE (flip needs 2 of 2)
+  let gwInFlight = false; // a /mesh/sync POST is mid-flight — don't race it into ONLINE
   let healthTimer = null;
+
   function startHealthRetry() {
     stopHealthRetry();
     healthTimer = setInterval(async () => {
+      if (state.netOverride === "offline") return; // manual "force demo offline" stays dark
       const res = await probeHealth();
-      if (res && state.mode === "offline" && state.autoOff) {
-        setMode("online", { quiet: false });
+      if (state.mode === "offline") {
+        liveStreak = res ? liveStreak + 1 : 0;
+        if (liveStreak >= 2 && isAutoNet()) autoToGateway();
+      } else if (state.mode === "gateway") {
+        if (res && !gwInFlight) autoToOnline();
       }
-    }, 4000);
+    }, 5000);
   }
   function stopHealthRetry() { if (healthTimer) { clearInterval(healthTimer); healthTimer = null; } }
+
+  function autoToGateway() {
+    liveStreak = 0;
+    state.netOverride = null;
+    setMode("gateway", { force: true, source: "auto" });
+  }
+  function autoToOnline() {
+    state.netOverride = null;
+    setMode("online", { fromGateway: true });
+  }
 
   async function restoreOnline(opts) {
     state.autoOff = false;
@@ -226,6 +258,30 @@
       return r.ok;
     } catch (_e) { return false; }
   }
+
+  /* small transient chip inside the status bar — e.g. "Gateway" flashes there
+   * while an auto-detected gateway run carries the mesh up */
+  function flashStatusChip(label, tone) {
+    const host = $(".sb-right");
+    let c = $("#sbFlash");
+    if (!c) {
+      c = document.createElement("span");
+      c.id = "sbFlash";
+      host.insertBefore(c, $(".sb-batt", host));
+    }
+    c.className = "chip chip-" + (tone || "n") + " sb-flash";
+    c.textContent = label;
+    c.hidden = false;
+    clearTimeout(flashStatusChip._t);
+    flashStatusChip._t = setTimeout(() => { c.hidden = true; }, 3600);
+  }
+
+  /* harness-level signal events: connectivity arriving lifts AUTO-OFFLINE to
+   * Gateway; the adapter dying under a live ONLINE mode degrades it */
+  window.addEventListener("online", () => {
+    if (state.mode === "offline" && isAutoNet()) autoToGateway();
+  });
+  window.addEventListener("offline", () => degrade("offline event"));
 
   /* =========================================================================
    * config + first run
@@ -449,16 +505,22 @@
     return state.loc || DEFAULT_LOC;
   }
   function askGeolocate() {
-    if (!navigator.geolocation) { toast("No location available here — using the demo default.", "warn"); return; }
+    if (!navigator.geolocation) { toast("No location available here — using the demo preset.", "warn"); return; }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        state.loc = { lat: +pos.coords.latitude.toFixed(5), lon: +pos.coords.longitude.toFixed(5), label: "Your device location" };
+        state.loc = {
+          lat: +pos.coords.latitude.toFixed(5),
+          lon: +pos.coords.longitude.toFixed(5),
+          label: "Your device location",
+          acc: Math.max(1, Math.round(pos.coords.accuracy || 0)),
+        };
         persist.loc();
         fitMapSoon();
         renderProfile();
-        toast("Location updated.", "ok");
+        if (state.tab === "mesh") renderMesh(); // locbar + composer chip live here too
+        toast("Reporting from your device location (±" + state.loc.acc + " m).", "ok");
       },
-      () => toast("Location not shared — using the demo default.", "warn"),
+      () => toast("No location shared — still reporting from the demo preset.", "warn"),
       { timeout: 6000 },
     );
   }
@@ -680,6 +742,11 @@
     { id: "FLOODED ROAD", type: "hazard", label: "Flooded road", icon: ICONS.pin, tone: "warn" },
     { id: "SMOKE", type: "hazard", label: "Smoke", icon: ICONS.pin, tone: "warn" },
   ];
+  ICONS.shieldS = ICONS.shield.replace('width="20" height="20"', 'width="12" height="12"');
+  ICONS.pinS = ICONS.pin.replace('width="18" height="18"', 'width="11" height="11"');
+
+  /** Where reports/syncs/asks are anchored: the device position once shared, else the demo preset. */
+  function locAcc() { return myLoc().acc ? " ±" + myLoc().acc + " m" : ""; }
 
   async function ensureIdentity() {
     if (state.identity) return state.identity;
@@ -703,13 +770,15 @@
    * Add a packet to the queue. Content only — the sig + deviceId are stamped at
    * send time so every queued packet travels under the session's own identity.
    */
-  function queuePacket(kind, status, text) {
+  function queuePacket(kind, status, text, opts) {
+    opts = opts || {};
     const kindDef = KINDS.find((k) => k.id === kind) || null;
     const pkt = {
       id: "mp-app-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
       kind: kindDef ? kindDef.type : "msg",
       status: kindDef ? (kindDef.type === "beacon" ? kind : status) : "",
       text: kindDef ? "" : String(text || ""),
+      to: opts.to || "",   // "SKYWATCH" = an Ask Skywatch question; reply comes back in a sync bundle
       lat: +myLoc().lat.toFixed(5),
       lon: +myLoc().lon.toFixed(5),
       ts: Date.now(),
@@ -766,6 +835,7 @@
         const sig = await crypto.subtle.sign("Ed25519", identity.priv, new TextEncoder().encode(msg));
         full.sig = bytesToRawB64(new Uint8Array(sig));
       }
+      if (p.to) full.to = p.to; // Ask Skywatch — addressed to the core for a task-8d back-reply
       packets.push(full);
     }
     if (packets.length === 0) {
@@ -773,6 +843,7 @@
       return null;
     }
     let result;
+    gwInFlight = true;
     try {
       const r = await fetch(apiBase() + "/mesh/sync", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -784,6 +855,8 @@
       q.forEach((p) => { p.state = "fail"; });
       if (!opts.silent) toast("Gateway sync failed — packets held with a sig state.", "warn");
       throw err;
+    } finally {
+      gwInFlight = false;
     }
     if (result.ok && result.json) {
       const rejected = new Set(result.json.rejectedIds || []);
@@ -1461,8 +1534,9 @@
       const mine = myPackets.filter((p) => p.kind === "msg" && p.state !== "sent").reverse().slice(0, 8);
       const rows = msgs.slice(-14).map((msg) => {
         const isMe = meId && msg.from === meId;
-        void isMe;
-        return `<div class="bubble ${isMe ? "me" : ""}">${esc(msg.text)}<div class="bubble-meta"><span>${esc(msg.from)}</span><span>${esc(fmtAgo(msg.ts))}</span></div></div>`;
+        const isCore = !!((msg.to && meId && msg.to === meId) || /skywatch/i.test(String(msg.from || "")));
+        const chip = isCore ? `<span class="chip chip-ok core-chip">${ICONS.shieldS} Skywatch</span>` : "";
+        return `<div class="bubble ${isCore ? "core" : isMe ? "me" : ""}">${chip}${esc(msg.text)}<div class="bubble-meta"><span>${esc(isCore ? "skywatch" : String(msg.from || ""))}</span><span>${esc(fmtAgo(msg.ts))}</span></div></div>`;
       });
       const queued = mine.map((p) => `<div class="bubble me">${esc(p.text)}<div class="bubble-meta"><span>you</span><span class="chip chip-mesh">queued · will send when one of us gets signal</span></div></div>`);
       const all = rows.concat(queued).slice(-18).join("");
@@ -1491,6 +1565,7 @@
 
     el.innerHTML = `
       <div class="sec-label" style="margin-top:2px">Mesh<small>${state.identNote || "the community layer — what keeps working with no bars"}</small></div>
+      <button class="locbar" id="locBar" aria-label="Reporting location — tap to change">${ICONS.pin}<span style="flex:1;min-width:0"><b>Reporting from:</b> ${esc(myLoc().label)}<span class="mono dim">${esc(locAcc())}</span></span><span class="mini dim">tap to change</span></button>
       ${gwHtml}
       <div class="chips" style="margin-bottom:10px">
         <span class="chip ${state.identity && !state.identity.legacy ? "chip-ok" : "chip-warn"} chip-mono">${state.identity ? esc(state.identity.deviceId) : "identity pending"}</span>
@@ -1500,11 +1575,20 @@
       <div class="composer card" style="margin-top:14px">
         <div class="chips">
           ${KINDS.map((k, i) => `<button class="kind-chip chip chip-n" data-kind="${esc(k.id)}" aria-pressed="false">${esc(k.label)}</button>`).join("<span></span>")}
+          <button class="kind-chip chip chip-n ask-chip" aria-pressed="false">${ICONS.shieldS} Ask Skywatch</button>
+        </div>
+        <div class="ask-prompts" id="askPrompts" hidden>
+          <span class="mini dim2">Suggested:</span>
+          ${ASKS.map((p) => `<button class="prompt-chip chip chip-n" data-prompt="${esc(p)}">${esc(p)}</button>`).join("")}
+          <span class="mini dim">answers from your brief — no live model</span>
         </div>
         <textarea id="meshText" maxlength="280" placeholder="What's happening around you?" aria-label="mesh message"></textarea>
         <div class="composer-foot">
           <span class="counter" id="meshCount">280</span>
-          <span class="chips"><span class="chip chip-mesh">signs with WebCrypto</span></span>
+          <span class="chips">
+            <button class="chip chip-n" id="locChip" aria-label="Reporting location — tap to change">${ICONS.pinS} ${esc(myLoc().acc ? "device" + locAcc() : "demo preset")}</button>
+            <span class="chip chip-mesh">signs with WebCrypto</span>
+          </span>
           <button class="btn btn-primary" id="meshSend" style="min-height:42px">${ICONS.send} Send</button>
         </div>
       </div>
@@ -1513,15 +1597,20 @@
       <div id="meshBundle" style="margin-top:16px">${bundleHtml}</div>`;
 
     wireComposer(el);
+    const locBar = $("#locBar", el);
+    if (locBar) locBar.addEventListener("click", () => { haptic(6); askGeolocate(); });
+    const locChip = $("#locChip", el);
+    if (locChip) locChip.addEventListener("click", () => { haptic(6); askGeolocate(); });
     const gwGo = $("#gwGo", el);
     if (gwGo) gwGo.addEventListener("click", async () => {
       haptic(10);
+      state.netOverride = "gateway"; // manual — becomes the link on purpose
       setMode("gateway", { force: true });
     });
     const gwRetry = $("#gwRetry", el);
     if (gwRetry) gwRetry.addEventListener("click", async () => { try { await syncGateway(); renderMesh(); } catch (_e) { renderMesh(); } });
     const gwRestore = $("#gwRestore", el);
-    if (gwRestore) gwRestore.addEventListener("click", () => { setMode("online", { quiet: true }); });
+    if (gwRestore) gwRestore.addEventListener("click", () => { state.netOverride = null; setMode("online", { quiet: true }); });
     renderMeshSigChip();
   }
 
@@ -1557,16 +1646,41 @@
     const ta = $("#meshText", el);
     ta.addEventListener("input", () => { $("#meshCount", el).textContent = String(280 - ta.value.length); });
     let pick = null;
+    let askOn = false;
+    const askZone = $("#askPrompts", el);
+    const askChip = el.querySelector(".ask-chip");
+    const setAsk = (on) => {
+      askOn = on;
+      if (on) pick = null;
+      el.querySelectorAll(".kind-chip").forEach((c) => c.setAttribute("aria-pressed", String(c.classList.contains("ask-chip") ? askOn : c.dataset.kind === pick)));
+      if (askZone) askZone.hidden = !on;
+      if (on) ta.focus();
+    };
     el.querySelectorAll(".kind-chip").forEach((chip) => {
       chip.addEventListener("click", () => {
         haptic(5);
+        if (chip.classList.contains("ask-chip")) { setAsk(!askOn); return; }
         pick = pick === chip.dataset.kind ? null : chip.dataset.kind;
-        el.querySelectorAll(".kind-chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.kind === pick)));
+        if (pick && askOn) askOn = false; // one mode at a time
+        setAsk(false);
+        el.querySelectorAll(".kind-chip").forEach((c) => c.setAttribute("aria-pressed", String(c.classList.contains("ask-chip") ? askOn : c.dataset.kind === pick)));
+      });
+    });
+    if (askZone) askZone.querySelectorAll(".prompt-chip").forEach((pc) => {
+      pc.addEventListener("click", () => {
+        haptic(5);
+        ta.value = pc.dataset.prompt || "";
+        $("#meshCount", el).textContent = String(280 - ta.value.length);
+        setAsk(true);
       });
     });
     $("#meshSend", el).addEventListener("click", () => {
       const text = ta.value.trim();
-      if (pick) {
+      if (askOn) {
+        if (!text) { toast("Type the question for Skywatch.", "warn"); return; }
+        queuePacket(null, "", text, { to: "SKYWATCH" });
+        toast("Asked Skywatch — the answer rides the next sync back.", "mesh");
+      } else if (pick) {
         const def = KINDS.find((k) => k.id === pick);
         queuePacket(pick, "", "");
         if (text) { queuePacket(null, def.id, text); }
@@ -1588,7 +1702,7 @@
 
   function renderBundle(bundle, syncOut) {
     const acks = (bundle.acks || []).map((a) => `<div class="uplink-row"><span style="color:var(--ok)">${ICONS.check}</span><span>${esc(a.message)}</span></div>`).join("") || '<p class="mini dim">no acks in this bundle</p>';
-    const msgs = (bundle.messages || []).map((m) => `<div class="uplink-row"><span class="mono dim">${esc(m.from)}</span><span>${esc(m.text)}</span></div>`).join("") || '<p class="mini dim">no messages for you in this bundle</p>';
+    const msgs = (bundle.messages || []).map((m) => `<div class="uplink-row">${/skywatch/i.test(String(m.from || "")) ? '<span style="color:var(--ok)">' + ICONS.shieldS + "</span>" : ""}<span class="mono dim">${esc(m.from)}</span><span>${esc(m.text)}</span></div>`).join("") || '<p class="mini dim">no messages for you in this bundle</p>';
     const roads = (bundle.blockedRoads || []).map((r) => `<div class="uplink-row"><span style="color:var(--danger)">${esc(r.status.toUpperCase())}</span><span>${esc(r.name)}</span><span class="mono dim">${Math.round((r.confidence || 0) * 100)}%</span></div>`).join("") || '<p class="mini dim">no fresh road verdicts</p>';
     const syncLine = syncOut
       ? `${esc(String(syncOut.received))} received · ${esc(String(syncOut.inserted))} stored · ${esc(String(syncOut.deduped))} deduped${syncOut.rejected ? " · " + esc(String(syncOut.rejected)) + " rejected" : ""}`
@@ -1629,8 +1743,9 @@
     const roleLine = mode === "offline" ? "You're relaying neighbors' messages" : mode === "gateway" ? "You're the neighborhood's link today" : "Full service — briefs, texts and calls";
 
     const modes = [
+      { id: "auto", label: "Auto", ic: "auto", sig: "?", sub: "Detect signal for me — /health liveness flips OFFLINE→Gateway→ONLINE by itself." },
       { id: "online", label: "Online", ic: "ok", sig: "5G", sub: "Everything works through the API." },
-      { id: "offline", label: "No Service", ic: "off", sig: "—", sub: "You went dark: mesh mode, reports queue up." },
+      { id: "offline", label: "No Service", ic: "off", sig: "—", sub: "Go dark on purpose — stays dark, auto-detect paused while pinned." },
       { id: "gateway", label: "Gateway", ic: "gw", sig: "1 bar", sub: "I have signal — become the link and sync." },
     ];
 
@@ -1643,19 +1758,20 @@
             <b style="font-family:var(--fd);font-size:15.5px">${isOnboarded() ? "Skywatch member" : "New to Skywatch"}</b>
             <div class="mini dim">${esc(roleLine)}</div>
           </div>
-          <span class="chip ${mode === "offline" ? "chip-mesh" : mode === "gateway" ? "chip-n" : "chip-ok"}">${mode === "offline" ? "MESH MODE" : mode === "gateway" ? "GATEWAY" : "5G"}</span>
+          <span class="chip ${mode === "offline" ? "chip-mesh" : mode === "gateway" ? "chip-n" : "chip-ok"}">${mode === "offline" ? "MESH MODE" : mode === "gateway" ? "GATEWAY" : "5G"} · ${isAutoNet() ? "auto" : "manual"}</span>
         </div>
 
-        <div class="sec-label">Network mode<small>the switch this demo exists for — try degrading on purpose</small></div>
+        <div class="sec-label">Network mode<small>auto-detect is on by default — a manual pick pins the chip until you return to Auto</small></div>
         <div class="mode-rows">
           ${modes.map((m) => `
-            <button class="mode-row" data-mode="${m.id}" aria-pressed="${mode === m.id}">
-              <div class="mode-ic ic-${m.ic}">${m.id === "online" ? ICONS.wifi : m.id === "offline" ? ICONS.stop : ICONS.link}</div>
+            <button class="mode-row" data-mode="${m.id}" aria-pressed="${m.id === "auto" ? isAutoNet() : !isAutoNet() && mode === m.id}">
+              <div class="mode-ic ic-${m.ic}">${m.id === "online" ? ICONS.wifi : m.id === "offline" ? ICONS.stop : m.id === "auto" ? ICONS.sync : ICONS.link}</div>
               <div style="flex:1;min-width:0"><b>${m.label}</b><span class="sub">${esc(m.sub)}</span></div>
               <span class="radio"></span>
             </button>`).join("")}
         </div>
         ${mode === "offline" ? `<p class="mini dim" style="margin-top:8px">While you're dark, Home and Map run on the last sync — and ${esc(String(state.queue.filter((q) => q.state === "queued").length))} packet(s) wait in the queue.</p>` : ""}
+        ${!isAutoNet() ? `<p class="mini dim" style="margin-top:8px">Manual override set — auto-detect is paused (the status chip carries a "manual" tag). Pick Auto to hand detection back.</p>` : ""}
 
         <div class="sec-label">Identity<small>a fresh keypair is minted every reload — a deliberate privacy call</small></div>
         <div class="card">
@@ -1664,7 +1780,7 @@
           <div class="kv"><span class="k">platform</span><span class="v">${esc((state.profile.platform || "sms").toUpperCase())}</span></div>
           <div class="kv"><span class="k">number</span><span class="v">${esc(maskPhone(state.profile.phone) || "—")}</span></div>
           <div class="kv"><span class="k">language</span><span class="v">${esc(LANG_NAMES[state.profile.lang] || "English")}</span></div>
-          <div class="kv"><span class="k">demo location</span><span class="v">${esc(myLoc().label)}</span></div>
+          <div class="kv"><span class="k">reporting from</span><span class="v">${esc(myLoc().label)}${esc(locAcc())}</span></div>
           <button class="btn btn-ghost btn-block" id="locBtn" style="margin-top:10px;min-height:42px">Use my real location</button>
         </div>
 
@@ -1693,12 +1809,30 @@
       row.addEventListener("click", () => {
         haptic(9);
         const target = row.dataset.mode;
-        if (target === state.mode) return;
+        if (target === "auto") {
+          if (isAutoNet()) return;
+          state.netOverride = null;
+          renderProfile();
+          toast("Auto mode — the app watches the signal for you.", "ok");
+          void probeHealth().then((ok) => {
+            if (ok) {
+              stopHealthRetry();
+              if (state.mode !== "online") setMode("online", { quiet: true });
+            } else if (state.mode !== "offline") {
+              setMode("offline", { force: true });
+            } else {
+              startHealthRetry();
+            }
+          });
+          return;
+        }
+        if (!isAutoNet() && target === state.mode) return;
+        state.netOverride = target;
+        if (target === state.mode) { renderProfile(); return; } // pin what's already showing
         if (target === "gateway") {
           setMode("gateway", { force: true });
           switchTab("mesh");
         } else {
-          state.autoOff = false;
           setMode(target, target === "offline" ? {} : { quiet: true });
         }
       });
@@ -1797,9 +1931,9 @@
     modal.innerHTML = `
       <h3>Three things to try</h3>
       <div class="walk-lines">
-        <div><b>1</b><span><b style="color:var(--text)">Go dark on purpose.</b> Profile → "No Service". Home and Map fall back to the last sync, new reports get a "queued" chip.</span></div>
-        <div><b>2</b><span><b style="color:var(--text)">Become the link.</b> Mesh → "I have signal". The queue rides /mesh/sync and the downlink bundle lands for the neighborhood.</span></div>
-        <div><b>3</b><span><b style="color:var(--text)">Or just kill the API.</b> While Online, stop the API — this app banners "connection lost" and drops to mesh mode by itself, then waits for /health.</span></div>
+        <div><b>1</b><span><b style="color:var(--text)">Go dark on purpose.</b> Profile → "No Service" pins manual OFFLINE — the chip's "manual" tag keeps auto-detect off, no matter what /health says.</span></div>
+        <div><b>2</b><span><b style="color:var(--text)">Auto-detect is the product.</b> In AUTO the app watches the browser's online/offline events and pings /health every 5 s: signal found flips OFFLINE→Gateway by itself, syncs the whole queue, and lands "Back online — everyone's news is out". Watch the status-bar chip on each hop.</span></div>
+        <div><b>3</b><span><b style="color:var(--text)">Become the link manually, too.</b> Mesh → "I have signal" runs the gateway sync — or just kill the API while online and watch the app degrade, then re-detect, all by itself. The queue sends once per sync; the server dedups by id.</span></div>
       </div>
       <button class="btn btn-primary btn-block" data-close-walk>Got it</button>`;
     wrap.querySelectorAll("[data-close-walk]").forEach((b) => b.addEventListener("click", () => { wrap.hidden = true; }));
@@ -1917,7 +2051,14 @@
 
   function renderStatusRight() {
     const mode = state.mode;
-    $("#sbMode").textContent = mode === "online" ? "5G" : mode === "gateway" ? "1 bar" : "No Service";
+    const label = !isAutoNet()
+      ? (mode === "online" ? "5G·M" : mode === "offline" ? "OFF·M" : "GW·M")
+      : (mode === "online" ? "AUTO-5G" : mode === "offline" ? "OFFLINE" : "GATEWAY");
+    const el = $("#sbMode");
+    if (el.textContent !== label) {
+      el.textContent = label;
+      el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump");
+    }
   }
 
   document.addEventListener("keydown", (e) => {
