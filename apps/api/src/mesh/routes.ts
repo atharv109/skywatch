@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Config } from "../config.ts";
 import type { AppDeps } from "../deps.ts";
 import { makeSatelliteFetcher } from "./satellite.ts";
+import { fetchRoute, osrmDistanceKm, preparedRoute, profileFor } from "../routes/osrm.ts";
 import { assembleMeshState, hashPrefix } from "./state.ts";
 import { makeSkywatchChat } from "./skywatch.ts";
 import { SyncError, processSync } from "./sync.ts";
@@ -11,7 +12,65 @@ import {
   SKYWATCH_CORE_ID,
   type MeshPhotoDoc,
   type MeshPhotoLabel,
+  type MeshRouteView,
 } from "./types.ts";
+
+/**
+ * Task 10 directions seam: live OSRM ONLY when SKYWATCH_LIVE_SYNC=1 (the same
+ * "this sync may touch the internet" knob as the satellite overlay); the COMMITTED
+ * prepared pack (Wi-Fi-death fallback) serves ONLY under DEMO_SIGNUP=1 and logs
+ * "prepared route served" — never presented as live. Both off = no routes key at
+ * all (hermetic/offline determinism unchanged).
+ */
+function makeDirectionsFetcher(
+  config: Config,
+  deps: Pick<AppDeps, "match">,
+  originOf: () => { lat: unknown; lon: unknown },
+  injFetcher?: typeof fetch,
+): (now: number) => Promise<MeshRouteView[]> {
+  if (!config.liveSync && !config.demoSignup) return () => Promise.resolve([]);
+  return async (now: number): Promise<MeshRouteView[]> => {
+    const originRaw = originOf();
+    const lat = originRaw.lat;
+    const lon = originRaw.lon;
+    if (typeof lat !== "number" || !Number.isFinite(lat) || typeof lon !== "number" || !Number.isFinite(lon)) return [];
+    const match = await deps.match();
+    // The VERIFIED-OPEN shelter (shelter-kind, open, confidence >= 0.5) — the same
+    // resource the bundle's `nearestVerifiedShelter` shows this sync.
+    const nearest = await match.nearestOpenResource({ type: "Point", coordinates: [lon, lat] }, now);
+    if (!nearest) return [];
+    const to = {
+      shelterId: nearest.sourceId,
+      name: nearest.name,
+      lat: nearest.loc.coordinates[1],
+      lon: nearest.loc.coordinates[0],
+    };
+    let route: MeshRouteView | null = null;
+    if (config.liveSync) {
+      const profile = profileFor(nearest.distanceKm > 0 ? nearest.distanceKm : osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon }));
+      const fetched = await fetchRoute({ lat, lon }, { lat: to.lat, lon: to.lon }, profile, injFetcher);
+      if (fetched) {
+        route = { ...fetched, from: { lat, lon }, to, profile, fetchedAt: now, source: "osrm" };
+      }
+    }
+    if (!route && config.demoSignup) {
+      const pack = await preparedRoute({ lat, lon }, to.shelterId);
+      if (pack) {
+        route = {
+          ...pack.route,
+          from: { lat, lon },
+          to,
+          profile: profileFor(osrmDistanceKm({ lat, lon }, { lat: to.lat, lon: to.lon })),
+          fetchedAt: now,
+          source: "fixture",
+        };
+        // Honesty marker: the fixture pack must NEVER masquerade as live.
+        console.log("prepared route served (fixture pack):", to.name);
+      }
+    }
+    return route ? [route] : [];
+  };
+}
 
 /**
  * Task 8 Offline Mode (mesh) endpoints — the backend side of the phones-only
@@ -66,6 +125,7 @@ export function meshRoutes(config: Config, deps: AppDeps): Hono {
         Date.now(),
         makeSkywatchChat(config, deps),
         makeSatelliteFetcher(config, deps),
+        makeDirectionsFetcher(config, deps, () => ({ lat: body.lat, lon: body.lon })),
       );
       return c.json(result);
     } catch (err) {

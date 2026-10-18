@@ -18,6 +18,7 @@ import {
   type MeshPacketIn,
   type ParsedPacket,
   type RescueKind,
+  type MeshRouteView,
   type SatelliteSection,
   type SkywatchChat,
   type VerifyState,
@@ -250,6 +251,9 @@ export async function processSync(
   // itself fetches, upserts hazards, and nulls out on any failure — the bundle
   // must never block or half-arrive).
   satellite?: (lat: number, lon: number, now: number) => Promise<SatelliteSection | null>,
+  // Task 10 directions: resolves the verified-open shelter's route (OSRM live /
+  // demo prepared pack, per the composed knobs); [] = nothing rode, never blocks.
+  directions?: (now: number) => Promise<MeshRouteView[]>,
 ): Promise<SyncOutcome> {
   if (typeof body?.deviceId !== "string" || body.deviceId.length === 0 || body.deviceId.length > 128) {
     throw new SyncError("deviceId must be a string of 1..128 chars");
@@ -448,6 +452,7 @@ export async function processSync(
     now,
     "en",
     sat ?? undefined,
+    directions,
   );
   return {
     received: body.packets.length,

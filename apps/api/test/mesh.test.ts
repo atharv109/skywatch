@@ -15,6 +15,7 @@ import { memoryMeshStore } from "../src/mesh/store.ts";
 import { assembleMeshState } from "../src/mesh/state.ts";
 import { makeSkywatchChat } from "../src/mesh/skywatch.ts";
 import { processSync } from "../src/mesh/sync.ts";
+import { fetchRoute, profileFor } from "../src/routes/osrm.ts";
 import { sigMessage } from "../src/mesh/sig.ts";
 import { ackMessage, buildDownlink, MESH_ACK_LINES } from "../src/mesh/downlink.ts";
 import { MESH_MSG_STATUS_MAX, SKYWATCH_CORE_ID, type MeshPacketIn } from "../src/mesh/types.ts";
@@ -185,6 +186,17 @@ interface SyncBody {
       alerts: Array<{ geometry: unknown }>;
       aqi: { aqi: number | null; pm25: number | null; source: string; observedMs: number } | null;
     };
+    routes?: Array<{
+      from: { lat: number; lon: number };
+      to: { shelterId: string; name: string };
+      profile: string;
+      coords: Array<[number, number]>;
+      distanceKm: number;
+      durationMin: number;
+      steps: Array<{ distanceM: number; name: string; instruction: string }>;
+      fetchedAt: number;
+      source: string;
+    }>;
   };
 }
 
@@ -947,6 +959,91 @@ describe("Task 8e: mesh photos + satellite overlay", () => {
     const inBundle = bundle.messages.find((m) => m.id === "mesh-test-msg-photo-1")!;
     expect(inBundle.photoRef).toBe("mesh-test-msg-photo-r1");
     expect(inBundle).toMatchObject({ hasPhoto: true, photoKind: "flood", photoUrl: "/mesh/photo/mesh-test-msg-photo-r1" });
+  });
+});
+
+describe("Task 10: offline directions via OSRM (facts, no validator)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("fetchRoute (injected fetcher): [lat,lon] coords sampled to ≤120, steps capped at 12, distance/duration normalized; profileFor >3 km ⇒ driving", async () => {
+    const bigGeom = Array.from({ length: 300 }, (_unused, i: number) => [-122.4 - i * 0.001, 47.6 + i * 0.0005]);
+    const osrmBody = {
+      routes: [
+        {
+          distance: 12345,
+          duration: 990,
+          geometry: { coordinates: bigGeom },
+          legs: [
+            {
+              steps: Array.from({ length: 18 }, (_unused, i: number) => ({
+                distance: 100 + i,
+                name: "4th Ave S",
+                maneuver: { type: i === 0 ? "depart" : i === 17 ? "arrive" : "turn", modifier: i % 2 ? "left" : "right" },
+              })),
+            },
+          ],
+        },
+      ],
+    };
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(osrmBody), { status: 200 }));
+    const route = await fetchRoute({ lat: 47.6, lon: -122.335 }, { lat: 47.605, lon: -122.3315 }, "foot", fetcher as unknown as typeof fetch);
+    expect(route).not.toBeNull();
+    expect(route!.coords).toHaveLength(120);
+    expect(route!.coords[0]).toEqual([47.6, -122.4]); // GeoJSON [lon,lat] flipped to [lat,lon]
+    expect(route!.distanceKm).toBe(12.35);
+    expect(route!.durationMin).toBe(17);
+    expect(route!.steps).toHaveLength(12); // cap even though the leg had 18
+    expect(route!.steps[0]!.instruction).toBe("depart right on 4th Ave S"); // phrase: type + modifier + road
+    // the evacuation default walks when plausible
+    expect(profileFor(3.01)).toBe("driving");
+    expect(profileFor(3)).toBe("foot");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    // failure → null (all-or-nothing; the app keeps its glow-line fallback)
+    expect(await fetchRoute({ lat: 47.6, lon: -122.33 }, { lat: 47.605, lon: -122.3315 }, "foot", vi.fn(async () => new Response("x", { status: 503 })) as unknown as typeof fetch)).toBeNull();
+  });
+
+  it("prepared pack fallback (DEMO_SIGNUP=1 gate): the bundle serves the committed fixture route badged source:'fixture' + the honesty log; a non-pack shelter ⇒ key omitted", async () => {
+    const h = harness({
+      env: { DEMO_SIGNUP: "1" }, // no SKYWATCH_LIVE_SYNC: the fixture pack is the only source; zero network
+      resources: [shelter({ sourceId: "seed-shelter-1", verifiedAt: NOW, status: "open" })], // a PACK-shelter, verified-open
+    });
+    const logSpy = vi.spyOn(console, "log");
+    const signer = makeSigner("mesh-test-device-route");
+    const body = (await (await syncPackets(h, GW, 47.605, -122.335, [packet(signer)])).json()) as SyncBody;
+    expect(body.bundle.routes).toHaveLength(1);
+    const route = body.bundle.routes![0]!;
+    expect(route.source).toBe("fixture"); // prepared pack, never masquerading as live
+    expect(route.to.shelterId).toBe("seed-shelter-1");
+    expect(route.to.name).toBe("Test Shelter"); // the harness resource (sourceId overridden onto the pack id)
+    expect(route.from).toEqual({ lat: 47.605, lon: -122.335 });
+    expect(route.coords.length).toBeGreaterThan(1);
+    expect(route.steps.length).toBeLessThanOrEqual(12);
+    expect(route.steps.every((s) => typeof s.instruction === "string")).toBe(true);
+    // A FACT, not decayed: no confidence/score-ish key exists anywhere on it
+    expect("confidence" in route).toBe(false);
+    expect("score" in route).toBe(false);
+    expect(logSpy.mock.calls.some((a) => String(a[0]).includes("prepared route served (fixture pack)"))).toBe(true);
+
+    // a NON-pack shelter is verified-open too — but no prepared route exists for it: routes stay ABSENT
+    const h2 = harness({
+      env: { DEMO_SIGNUP: "1" },
+      resources: [shelter({ sourceId: "mesh-test-shelter-not-in-pack", verifiedAt: NOW, status: "open" })],
+    });
+    const body2 = (await (await syncPackets(h2, GW, 47.6, -122.33, [packet(signer)])).json()) as SyncBody;
+    expect(body2.bundle.routes).toBeUndefined();
+  });
+
+  it("knobs off (default): no routes key and NO network at all — hermetic determinism unchanged", async () => {
+    const guard = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", guard as unknown as typeof fetch);
+    const h = harness({ resources: [shelter({ sourceId: "seed-shelter-1", verifiedAt: NOW, status: "open" })] });
+    const body = (await (await syncPackets(h, GW, 47.6, -122.33, [packet(makeSigner("mesh-test-device-route-2"))])).json()) as SyncBody;
+    expect(body.bundle.routes).toBeUndefined();
+    expect(guard).not.toHaveBeenCalled();
   });
 });
 

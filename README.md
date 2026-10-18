@@ -125,6 +125,7 @@ Enforced in code, not policy.
 
   [offline mesh] phones (WebRTC hotspot) -> POST /mesh/sync -> downlink bundle
                  gateway uplink; satellite overlay rides sync when SKYWATCH_LIVE_SYNC=1
+                 verified-shelter route via OSRM (foot <=3 km else driving) or the committed prepared pack (DEMO_SIGNUP)
 
   [check-ins] ┄┄ fire-and-forget mirror ┄┄> Tiger Data status_events (TIGER_DATABASE_URL)
 ```
@@ -172,9 +173,9 @@ Deploy target is Render (`render.yaml`, Node 20, health `/health`, `REPLAY=1` pi
 | `REPLAY` | `1` = feeds read committed fixtures + renders via templates (the demo path) | `0` = live feeds + live Gemini |
 | `TOOL_SECRET` | Shared secret for `/tools/*`, `/verify/run`, `/roads/check` | Endpoints accept unauthenticated writes (demo-grade; boot-log warning) |
 | `TIGER_DATABASE_URL` | Check-in mirror into Tiger Data `status_events` + `GET /tools/status-history` | No Tiger writes; history route returns `503 {configured:false}` — never faked |
-| `SKYWATCH_LIVE_SYNC` | `1` = gateway sync live-fetches the satellite overlay into `hazards` | No satellite section, no fetch |
+| `SKYWATCH_LIVE_SYNC` | `1` = gateway sync live-fetches the satellite overlay into `hazards` + the OSRM walking/driving route to the bundle's verified-open shelter (Task 10) | No satellite section, no fetch, no live routes — the app keeps its glow-line fallback |
 | `XAI_API_KEY` | Grok Voice TTS (`voice_id=eve`) renders post-call recap mp3 (`tts_cache`, `tl` unsupported → text-only) | Text-only path, zero TTS calls |
-| `DEMO_SIGNUP` | `1` = phone-native demo onboarding routes (`POST /demo/signup`, `/demo/area-brief`) | 403 on both routes |
+| `DEMO_SIGNUP` | `1` = phone-native demo onboarding routes (`POST /demo/signup`, `/demo/area-brief`, `/demo/brief`) + honestly-badged `source:"fixture"` prepared-pack route fallback (`fixtures/demo-routes.json`, regenerate: `node scripts/fetch-demo-routes.mjs` in apps/api) | 403 on the demo routes; no route fallback (live OSRM only) |
 | `GEMINI_LIVE_IN_REPLAY` | `1` = live Gemini inside `REPLAY=1` for render + beat-6 chat Q&A | Demo stays deterministic-fallback under replay — a live failure means fallback, never a dead beat |
 | `PORT` | HTTP listener (Render injects its own) | 3000 |
 

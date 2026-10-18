@@ -3,6 +3,7 @@ import { fallbackRender, TEMPLATES } from "../brief/fallback.ts";
 import { haversineKm } from "../match/geo.ts";
 import type { MatchStore } from "../match/store.ts";
 import type { Lang } from "../types/brief.ts";
+import type { MeshRouteView } from "./types.ts";
 import { hashPrefix, messageView } from "./state.ts";
 import type { MeshStore } from "./store.ts";
 import type { DownlinkBundle, SatelliteSection } from "./types.ts";
@@ -74,6 +75,10 @@ export async function buildDownlink(
   // Task 8e: the ALREADY-FETCHED satellite snapshot (undefined/null = omitted —
   // the fetch lives in the sync path, never inside the bundle build).
   satellite?: SatelliteSection | null,
+  // Task 10: the directions seam — resolves the verified-open shelter's walking/
+  // driving route (live OSRM or the demo prepared pack). Never throws into the
+  // bundle; empty/failed = the key is simply omitted.
+  directions?: (now: number) => Promise<MeshRouteView[]>,
 ): Promise<DownlinkBundle> {
   const brief = await buildUserBrief(
     match,
@@ -103,6 +108,16 @@ export async function buildDownlink(
     .sort((a, b) => b.ts - a.ts || a.id.localeCompare(b.id))
     .slice(0, MESH_MSG_BUNDLE_CAP)
     .map((p) => messageView(p, byRef));
+  // Task 10: the fact-based route (no validator) — omitted on failure/absence.
+  let routes: MeshRouteView[] | undefined;
+  if (directions) {
+    try {
+      const fetched = await directions(now);
+      if (Array.isArray(fetched) && fetched.length > 0) routes = fetched;
+    } catch (err) {
+      console.error("directions failed (routes omitted):", err instanceof Error ? err.message : err);
+    }
+  }
   return {
     generatedAt: now,
     brief: fallbackRender(brief),
@@ -110,8 +125,9 @@ export async function buildDownlink(
     blockedRoads: brief.blockedRoads,
     acks,
     messages,
-    // Optional key: present ONLY when the satellite snapshot was fetched; a
-    // section that failed to fetch is absent (never half-arrive).
+    // Optional keys: a section/fact is present ONLY when it was genuinely fetched;
+    // failure = absent (never half-arrive).
     ...(satellite ? { satellite } : {}),
+    ...(routes ? { routes } : {}),
   };
 }

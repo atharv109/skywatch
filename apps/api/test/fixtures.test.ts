@@ -11,6 +11,7 @@ const names = [
   "cameras.json",
   "openmeteo-aqi.json",
   "photon-inbound-samples.json",
+  "demo-routes.json", // Task 10 PREPARED PACK (committed: OSRM routes for the seed shelters)
 ];
 
 function fixturePath(name: string): string {

@@ -74,6 +74,25 @@ export interface SatelliteSection {
   } | null;
 }
 
+/**
+ * Task 10: offline directions to the bundle's verified-open shelter. A FACT (no
+ * validator) with the honesty badges: fetchedAt + source ("osrm" = fetched live at
+ * this sync; "fixture" = the COMMITTED prepared pack — demo-gated, never presented
+ * as live). Coordinates are [lat, lon] (sampled ≤120 vertices); ≤12 phrase steps.
+ */
+export type OsrmProfile = "foot" | "driving";
+export interface MeshRouteView {
+  from: { lat: number; lon: number };
+  to: { shelterId: string; name: string; lat: number; lon: number };
+  profile: OsrmProfile;
+  coords: Array<[number, number]>;
+  distanceKm: number;
+  durationMin: number;
+  steps: Array<{ distanceM: number; name: string; instruction: string }>;
+  fetchedAt: number;
+  source: "osrm" | "fixture";
+}
+
 /** Canonical normalized rescue kinds (the packet's raw `status` is normalized at the door). */
 export const RESCUE_KINDS = ["Trapped", "Injured", "Need Rescue"] as const;
 export type RescueKind = (typeof RESCUE_KINDS)[number];
@@ -302,4 +321,6 @@ export interface DownlinkBundle {
   messages: MeshMessageView[];
   /** Task 8e: the live satellite snapshot for the gateway's area — present ONLY when SKYWATCH_LIVE_SYNC=1 AND every source fetch succeeded (never half-arrive). */
   satellite?: SatelliteSection;
+  /** Task 10: walking/driving directions to the bundle's verified-open shelter — present ONLY when a route was fetched (or the demo-prepared pack served); failure ⇒ key omitted (the app falls back to its glow line). */
+  routes?: MeshRouteView[];
 }
