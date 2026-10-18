@@ -2078,6 +2078,19 @@
   $("#mapZoomOut").addEventListener("click", () => { view.zoom = clamp(view.zoom / 1.35, 0.35, 2.8); drawMap(); });
   $("#mapRecenter").addEventListener("click", () => { fitAll(); drawMap(); });
 
+  /* platform-aware directions link — iOS Safari ignores geo:, so iOS gets an
+   * Apple Maps URL, Android gets the geo: intent, everything else gets the
+   * Google Maps web directions (opens in a new tab) */
+  function directionsUrl(lat, lon, name) {
+    const ua = navigator.userAgent || "";
+    const ipadOs = /Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1; // iPadOS poses as Mac
+    const isIOS = /iPhone|iPad|iPod/i.test(ua) || ipadOs;
+    const isAndroid = /Android/i.test(ua);
+    if (isIOS) return "https://maps.apple.com/?daddr=" + lat + "," + lon + (name ? "&q=" + encodeURIComponent(name) : "");
+    if (isAndroid) return "geo:" + lat + "," + lon + "?q=" + encodeURIComponent(lat + "+" + lon + (name ? " (" + name + ")" : ""));
+    return "https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lon;
+  }
+
   function openPinSheet(X, Y) {
     let best = null, bestD = 34;
     for (const pc of pinCache) {
@@ -2107,7 +2120,7 @@
         <span class="chip chip-n chip-mono">${esc(r.kind)}</span>
       </div>
       ${r.hours ? `<p class="pin-hours">${esc(r.hours)}</p>` : `<p class="pin-hours dim">No posted hours — the status above is the freshest check-in.</p>`}
-      <a class="btn btn-cta btn-block" style="margin-top:14px" href="geo:${r.lat},${r.lon}" rel="noopener">${ICONS.pin} Directions</a>
+      <a class="btn btn-cta btn-block" style="margin-top:14px" href="${esc(directionsUrl(r.lat, r.lon, r.name))}" target="_blank" rel="noopener">${ICONS.pin} Directions</a>
       <p class="mini dim2" style="margin-top:10px;text-align:center">Route line is a demo guide — not turn-by-turn navigation.</p>
     `, null, "sheet-detail");
   }
@@ -3003,7 +3016,7 @@
     startPolling();
     startHealthRetry(); // queued packets from a past session drain even without a mode transition
     // debug hook (harmless; also lets the lead inspect live state from the console)
-    window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway };
+    window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway, directionsUrl };
 
     /* Native BLE transport seam — runs ONLY in the Capacitor native build, where
      * apps/native/sync-web.mjs injects window.SKYWATCH_NATIVE and loads native-ble.js.
