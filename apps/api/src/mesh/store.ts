@@ -2,12 +2,13 @@ import type { Db } from "mongodb";
 import { COLLECTIONS } from "../db/client.ts";
 import { haversineKm } from "../match/geo.ts";
 import type { Point } from "../types/docs.ts";
-import type { MeshBeaconDoc, MeshDeviceDoc, MeshPacketDoc, RescueKind } from "./types.ts";
+import type { MeshBeaconDoc, MeshDeviceDoc, MeshPacketDoc, MeshPhotoDoc, RescueKind } from "./types.ts";
 
 /**
  * The mesh store surface (Task 8): packets, pinned device keys, beacon clusters —
  * same split as the other stores (Mongo production path from db/client.ts +
- * an in-memory implementation for hermetic tests).
+ * an in-memory implementation for hermetic tests). Task 8e adds the photo store
+ * (mesh_photos, upsert by photoRef).
  */
 export interface MeshStore {
   getDevice(deviceId: string): Promise<MeshDeviceDoc | null>;
@@ -18,6 +19,10 @@ export interface MeshStore {
   /** Insert one packet; false = a packet with this id already exists (gateway-retry dedup). */
   insertPacket(doc: MeshPacketDoc): Promise<boolean>;
   listPackets(): Promise<MeshPacketDoc[]>;
+  /** Upsert one photo by photoRef (idempotent gateway retries overwrite). */
+  putPhoto(doc: MeshPhotoDoc): Promise<void>;
+  getPhoto(photoRef: string): Promise<MeshPhotoDoc | null>;
+  listPhotos(): Promise<MeshPhotoDoc[]>;
   /** Nearest cluster of the same kind within radiusM of loc (server-side over the beacons 2dsphere index). */
   findBeaconCluster(kind: RescueKind, loc: Point, radiusM: number): Promise<MeshBeaconDoc | null>;
   insertBeacon(doc: MeshBeaconDoc): Promise<void>;
@@ -67,6 +72,18 @@ export function mongoMeshStore(db: Db): MeshStore {
     async listPackets() {
       return db.collection<MeshPacketDoc>(COLLECTIONS.meshPackets).find({}, { projection: { _id: 0 } }).toArray();
     },
+    async putPhoto(doc) {
+      // Upsert by photoRef: a gateway retry (or a re-shot ref) overwrites byte-for-byte.
+      await db
+        .collection<MeshPhotoDoc>(COLLECTIONS.meshPhotos)
+        .replaceOne({ photoRef: doc.photoRef }, doc as never, { upsert: true });
+    },
+    async getPhoto(photoRef) {
+      return db.collection<MeshPhotoDoc>(COLLECTIONS.meshPhotos).findOne({ photoRef }, { projection: { _id: 0 } });
+    },
+    async listPhotos() {
+      return db.collection<MeshPhotoDoc>(COLLECTIONS.meshPhotos).find({}, { projection: { _id: 0 } }).toArray();
+    },
     async findBeaconCluster(kind, loc, radiusM) {
       const hits = await db
         .collection<MeshBeaconDoc>(COLLECTIONS.beacons)
@@ -109,6 +126,7 @@ export function memoryMeshStore(): MeshStore {
   const devices = new Map<string, MeshDeviceDoc>();
   const packets = new Map<string, MeshPacketDoc>();
   const beacons = new Map<string, MeshBeaconDoc>();
+  const photos = new Map<string, MeshPhotoDoc>();
   return {
     async getDevice(deviceId) {
       return devices.get(deviceId) ?? null;
@@ -130,6 +148,15 @@ export function memoryMeshStore(): MeshStore {
     },
     async listPackets() {
       return [...packets.values()];
+    },
+    async putPhoto(doc) {
+      photos.set(doc.photoRef, { ...doc });
+    },
+    async getPhoto(photoRef) {
+      return photos.get(photoRef) ?? null;
+    },
+    async listPhotos() {
+      return [...photos.values()];
     },
     async findBeaconCluster(kind, loc, radiusM) {
       let best: MeshBeaconDoc | null = null;

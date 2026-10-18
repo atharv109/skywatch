@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import type { Db } from "mongodb";
 import { loadConfig, type Config } from "../src/config.ts";
@@ -18,6 +18,7 @@ import { processSync } from "../src/mesh/sync.ts";
 import { sigMessage } from "../src/mesh/sig.ts";
 import { ackMessage, buildDownlink, MESH_ACK_LINES } from "../src/mesh/downlink.ts";
 import { MESH_MSG_STATUS_MAX, SKYWATCH_CORE_ID, type MeshPacketIn } from "../src/mesh/types.ts";
+import { fetchSatelliteSection } from "../src/mesh/satellite.ts";
 import { buildUserBrief } from "../src/brief/build.ts";
 import { fallbackRender } from "../src/brief/fallback.ts";
 import type { HazardDoc, ResourceDoc, RoadDoc } from "../src/types/docs.ts";
@@ -134,14 +135,14 @@ interface Harness {
 }
 
 function harness(
-  opts: { hazards?: HazardDoc[]; resources?: ResourceDoc[]; roads?: RoadDoc[] } = {},
+  opts: { hazards?: HazardDoc[]; resources?: ResourceDoc[]; roads?: RoadDoc[]; env?: Record<string, string> } = {},
 ): Harness {
   const astore = memoryStore();
   for (const h of opts.hazards ?? []) void astore.upsertHazard(h);
   for (const r of opts.resources ?? []) void astore.upsertResource(r);
   for (const r of opts.roads ?? []) void astore.upsertRoad(r);
   const meshStore = memoryMeshStore();
-  const config = loadConfig({ REPLAY: "1" });
+  const config = loadConfig({ REPLAY: "1", ...opts.env });
   const app = createApp(config, {
     store: async () => astore,
     pipeline: async () => emptyPipelineResult(),
@@ -178,6 +179,12 @@ interface SyncBody {
     blockedRoads: Array<{ cameraId: string; status: string }>;
     acks: Array<{ beaconClusterId: string; message: string }>;
     messages: Array<{ id: string; from: string; to: string | null; text: string; ts: number; hops: number }>;
+    satellite?: {
+      fetchedAt: number;
+      plumes: Array<{ geometry: unknown }>;
+      alerts: Array<{ geometry: unknown }>;
+      aqi: { aqi: number | null; pm25: number | null; source: string; observedMs: number } | null;
+    };
   };
 }
 
@@ -703,6 +710,217 @@ describe("Task 8d: Ask Skywatch (chatbot over the mesh)", () => {
   });
 });
 
+describe("Task 8e: mesh photos + satellite overlay", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Minimal JPEG/PNG bytes (magic-prefixed). */
+  function imageBytes(n = 99, jpeg = true): Buffer {
+    const b = Buffer.alloc(n, 0x11);
+    if (jpeg) {
+      b[0] = 0xff;
+      b[1] = 0xd8;
+      b[2] = 0xff;
+      b[n - 1] = 0xd9;
+    } else {
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]).copy(b, 0);
+    }
+    return b;
+  }
+
+  async function postPhoto(h: Harness, body: Record<string, unknown>): Promise<Response> {
+    return h.app.request("/mesh/photo", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  async function pinnedDevice(h: Harness, deviceId: string): Promise<void> {
+    await syncPackets(h, GW, 47.6, -122.33, [packet(makeSigner(deviceId), { type: "hazard", status: "signal check" })]);
+  }
+
+  it("photo upload is TOFU-pinned-device-only: unknown 403, legacy 403, signed 200; the reserved core id is rejected", async () => {
+    const h = harness();
+    const legacySigner = makeSigner("mesh-test-photo-legacy");
+    await syncPackets(h, GW, 47.6, -122.33, [
+      packet(legacySigner, { legacy: true, sig: null, pubkey: null }), // pinned WITHOUT a key
+    ]);
+    expect((await postPhoto(h, { deviceId: "mesh-test-photo-legacy", photoRef: "r-legacy", data: imageBytes().toString("base64") })).status).toBe(403);
+    expect((await postPhoto(h, { deviceId: "mesh-test-photo-never-seen", photoRef: "r-ghost", data: imageBytes().toString("base64") })).status).toBe(403);
+    expect((await postPhoto(h, { deviceId: SKYWATCH_CORE_ID, photoRef: "r-core", data: imageBytes().toString("base64") })).status).toBe(400);
+
+    const deviceId = "mesh-test-photo-device-1";
+    await pinnedDevice(h, deviceId);
+    const ok = await postPhoto(h, { deviceId, photoRef: "mesh-test-photo-r1", data: imageBytes().toString("base64"), label: "road-broken" });
+    expect(ok.status).toBe(200);
+    expect((await (await h.meshStore.getPhoto("mesh-test-photo-r1"))!).kind).toBe("road-broken");
+  });
+
+  it("photo round-trip: GET bytes with immutable cache + content type; index is hash-only; unknown ref 404; retry overwrite is idempotent", async () => {
+    const h = harness();
+    const deviceId = "mesh-test-photo-device-2";
+    await pinnedDevice(h, deviceId);
+    const bytes = imageBytes();
+    const data = bytes.toString("base64");
+    await postPhoto(h, { deviceId, photoRef: "mesh-test-photo-r2", data, label: "fire" });
+    await postPhoto(h, { deviceId, photoRef: "mesh-test-photo-r2", data: imageBytes(33).toString("base64"), label: "fire" }); // retry overwrites (same ref, same label)
+
+    const res = await h.app.request("/mesh/photo/mesh-test-photo-r2");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect(res.headers.get("cache-control")).toContain("immutable");
+    const served = Buffer.from(await res.arrayBuffer());
+    expect(served.length).toBe(33);
+
+    const index = (await (await h.app.request("/mesh/photos")).json()) as {
+      photos: Array<{ photoRef: string; kind: string | null; contentType: string; bytes: number; ts: number; deviceId: string; url: string }>;
+    };
+    expect(index.photos).toHaveLength(1); // index holds ONE doc for the ref (overwrite is not an append)
+    const entry = index.photos[0]!;
+    expect(entry).toMatchObject({ photoRef: "mesh-test-photo-r2", kind: "fire", contentType: "image/jpeg", bytes: 33, deviceId: deviceHash(deviceId), url: "/mesh/photo/mesh-test-photo-r2" });
+    expect(JSON.stringify(index)).not.toContain(deviceId);
+
+    expect((await h.app.request("/mesh/photo/mesh-test-photo-nope")).status).toBe(404);
+
+    // png variant serves image/png
+    await postPhoto(h, { deviceId, photoRef: "mesh-test-photo-r3", data: imageBytes(40, false).toString("base64") });
+    const png = await h.app.request("/mesh/photo/mesh-test-photo-r3");
+    expect(png.headers.get("content-type")).toBe("image/png");
+  });
+
+  it("photo caps + validation: 413 over 150 KB with a reason list; malformed base64 / non-image magic / bad label 400; bytes never ride the packet batch", async () => {
+    const h = harness();
+    const deviceId = "mesh-test-photo-device-3";
+    await pinnedDevice(h, deviceId);
+
+    const big = await postPhoto(h, { deviceId, photoRef: "r-big", data: imageBytes(150 * 1024 + 4).toString("base64") });
+    expect(big.status).toBe(413);
+    const bigBody = (await big.json()) as { reasons: string[] };
+    expect(bigBody.reasons.join(" ")).toContain("150 KB");
+
+    expect((await postPhoto(h, { deviceId, photoRef: "r-b64", data: "not-b64!!" })).status).toBe(400);
+    expect((await postPhoto(h, { deviceId, photoRef: "r-magic", data: Buffer.from("plain text").toString("base64") })).status).toBe(400);
+    expect((await postPhoto(h, { deviceId, photoRef: "r-label", data: imageBytes().toString("base64"), label: "volcano" })).status).toBe(400);
+    expect((await h.meshStore.getPhoto("r-big"))).toBeNull(); // rejected uploads store nothing
+  });
+
+  it("photoRef rides packets: hazard reports render hasPhoto/photoKind/photoUrl once (and only once) the bytes arrive", async () => {
+    const h = harness();
+    const deviceId = "mesh-test-photo-device-4";
+    const signer = makeSigner(deviceId);
+    await syncPackets(h, GW, 47.6, -122.33, [
+      packet(signer, { id: "mesh-test-photo-hz", type: "hazard", status: "road broken at 5th", photoRef: "mesh-test-photo-r5" }),
+    ]);
+
+    const before = (await (await h.app.request("/mesh/state")).json()) as {
+      hazardReports: Array<{ hasPhoto: boolean; photoKind: string | null; photoUrl: string | null }>;
+    };
+    // declared but never uploaded: NO dangling link rendered
+    expect(before.hazardReports[0]).toMatchObject({ hasPhoto: false, photoKind: null, photoUrl: null });
+
+    await postPhoto(h, { deviceId, photoRef: "mesh-test-photo-r5", data: imageBytes(55).toString("base64"), label: "flood" });
+    const state = (await (await h.app.request("/mesh/state")).json()) as typeof before & { generatedAt: number };
+    expect(state.hazardReports[0]).toMatchObject({ hasPhoto: true, photoKind: "flood", photoUrl: "/mesh/photo/mesh-test-photo-r5" });
+
+    // the same view rides /map/state's data-gated mesh section
+    const map = (await (await h.app.request("/map/state")).json()) as { mesh?: typeof state };
+    expect(map.mesh?.hazardReports[0]).toMatchObject({ hasPhoto: true, photoKind: "flood" });
+  });
+
+  // ---- satellite overlay ----
+
+  const PLUME_GEOJSON = { type: "FeatureCollection", features: [] as unknown[] };
+  let seqSat = 0;
+  function plumeFeature(lon: number, lat: number): unknown {
+    seqSat += 1;
+    return {
+      geometry: { type: "Polygon", coordinates: [[[lon, lat], [lon + 0.4, lat], [lon + 0.4, lat + 0.4], [lon, lat + 0.4], [lon, lat]]] },
+      properties: { Density: "High", Start: "2026290 1200", End_: "2026290 1500", Satellite: "NOAA-20" },
+    };
+  }
+  const alertFeature = (lon: number, lat: number): unknown => ({
+    geometry: { type: "Polygon", coordinates: [[[lon, lat], [lon + 0.3, lat], [lon + 0.3, lat + 0.3], [lon, lat + 0.3], [lon, lat]]] },
+    properties: { id: "nws-8e-1", event: "Flood Advisory", severity: "Moderate", headline: "Flood Advisory for the demo basin", effective: "2026-10-17T00:00:00Z", ends: "2026-10-18T00:00:00Z" },
+  });
+  const openMeteo = { current: { time: "2026-10-17T23:00", pm2_5: 12.3, us_aqi: 45 } };
+
+  /** URL-routed fetch stub: arcgis -> plumes, weather.gov -> alerts, open-meteo -> aqi. */
+  function satFetch(routes: Record<string, unknown>, fail?: string): typeof fetch {
+    return vi.fn(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (fail && u.includes(fail)) return new Response("boom", { status: 500 });
+      if (u.includes("services2.arcgis.com")) return new Response(JSON.stringify({ ...PLUME_GEOJSON, features: routes.plumes }), { status: 200 });
+      if (u.includes("api.weather.gov")) return new Response(JSON.stringify({ type: "FeatureCollection", features: routes.alerts }), { status: 200 });
+      if (u.includes("open-meteo")) return new Response(JSON.stringify(openMeteo), { status: 200 });
+      throw new Error(`unexpected url ${u}`);
+    }) as unknown as typeof fetch;
+  }
+
+  it("satellite snapshot (unit): plumes/alerts bbox-filtered + capped, AQI rides, normalized hazards come out of the EXISTING ingest normalizers", async () => {
+    const fetcher = satFetch({
+      plumes: [plumeFeature(-122.4, 47.6), plumeFeature(-100.0, 40.0)], // second is outside the bbox
+      alerts: [alertFeature(-122.35, 47.55), alertFeature(-90.0, 40.0)],
+    });
+    const out = await fetchSatelliteSection({ lat: 47.6, lon: -122.33 }, NOW, fetcher);
+    expect(out).not.toBeNull();
+    expect(out!.section.plumes).toHaveLength(1);
+    expect(out!.section.alerts).toHaveLength(1);
+    expect(out!.section.aqi).toMatchObject({ aqi: 45, source: "Open-Meteo", pm25: 12.3 });
+    const types = out!.hazards.map((h) => h.type);
+    expect(types).toContain("smoke");
+    expect(types).toContain("flood"); // Flood Advisory -> flood via the shared event map
+    expect(types).toContain("aqi");
+    expect(out!.hazards.every((h) => h.sourceId.startsWith("hms-smoke:") || h.sourceId.startsWith("nws:") || h.sourceId.startsWith("aqi:"))).toBe(true);
+  });
+
+  it("satellite caps: >25 plumes truncate to 25, >10 alerts to 10", async () => {
+    const out = await fetchSatelliteSection(
+      { lat: 47.6, lon: -122.33 },
+      NOW,
+      satFetch({ plumes: Array.from({ length: 30 }, (_unused, i) => plumeFeature(-122.45 + 0.02 * i, 47.6)), alerts: Array.from({ length: 12 }, () => alertFeature(-122.35, 47.55)) }),
+    );
+    expect(out!.section.plumes).toHaveLength(25);
+    expect(out!.section.alerts).toHaveLength(10);
+  });
+
+  it("all-or-nothing: any source failure omits the WHOLE section; processSync leaves it off the bundle", async () => {
+    const out = await fetchSatelliteSection(
+      { lat: 47.6, lon: -122.33 },
+      NOW,
+      satFetch({ plumes: [plumeFeature(-122.4, 47.6)], alerts: [] }, "api.weather.gov"),
+    );
+    expect(out).toBeNull();
+  });
+
+  it("route gate: SKYWATCH_LIVE_SYNC=1 fetches + upserts hazards and the bundle carries the section; unset = no section, no fetch at all", async () => {
+    // Gate ON (live knob is independent of REPLAY — both set here on purpose).
+    const hOn = harness({ env: { SKYWATCH_LIVE_SYNC: "1" } });
+    vi.stubGlobal("fetch", satFetch({ plumes: [plumeFeature(-122.4, 47.6)], alerts: [alertFeature(-122.35, 47.55)] }));
+    const signer = makeSigner(GW);
+    const synced = (await (await syncPackets(hOn, GW, 47.6, -122.33, [packet(signer)])).json()) as SyncBody;
+    expect(synced.bundle.satellite).toBeTruthy();
+    expect(synced.bundle.satellite!.plumes).toHaveLength(1);
+    expect(synced.bundle.satellite!.aqi?.aqi).toBe(45);
+    // normalized hazards are UPSERTED — dashboards + future briefs gain them
+    const hazardIds = (await hOn.astore.listHazards()).map((h) => h.sourceId);
+    expect(hazardIds.some((id) => id.startsWith("hms-smoke:"))).toBe(true);
+    expect(hazardIds.some((id) => id.startsWith("nws:"))).toBe(true);
+
+    // A failing source omits the section but NEVER fails the sync.
+    vi.stubGlobal("fetch", satFetch({ plumes: [plumeFeature(-122.4, 47.6)], alerts: [] }, "api.weather.gov"));
+    const syncedDegraded = (await (await syncPackets(hOn, GW, 47.6, -122.33, [packet(signer)])).json()) as SyncBody;
+    expect(syncedDegraded.bundle.satellite).toBeUndefined();
+
+    // Gate OFF (default): nothing fetched, no section — tests/hermetic demo stay offline.
+    const hOff = harness();
+    const guard = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", guard as unknown as typeof fetch);
+    const syncedOff = (await (await syncPackets(hOff, GW, 47.6, -122.33, [packet(makeSigner(GW))])).json()) as SyncBody;
+    expect(syncedOff.bundle.satellite).toBeUndefined();
+    expect(guard).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /mesh/state + /map/state mesh section (privacy, data-gated merge)", () => {
   it("ranked clusters, decayed hazard reports, anonymized coverage dots — never a deviceId or phone", async () => {
     const h = harness();
@@ -769,6 +987,8 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: mesh stores (dedup index,
     await db.collection(COLLECTIONS.meshPackets).deleteMany({ id: { $regex: /^mesh-test-/ } });
     // 8d answers ride the reserved core id (ids start "chat:") — clean by deviceId.
     await db.collection(COLLECTIONS.meshPackets).deleteMany({ deviceId: SKYWATCH_CORE_ID });
+    // 8e photos clean by their mesh-test- refs.
+    await db.collection(COLLECTIONS.meshPhotos).deleteMany({ photoRef: { $regex: /^mesh-test-/ } });
     await db.collection(COLLECTIONS.beacons).deleteMany({
       $or: [{ sources: { $regex: /^mesh-test-/ } }, { packetIds: { $regex: /^mesh-test-/ } }],
     });
@@ -856,6 +1076,67 @@ describe.skipIf(!process.env.MONGODB_URI)("real Mongo: mesh stores (dedup index,
 
     const state = (await (await app.request("/mesh/state")).json()) as { messages: Array<{ from: string; to: string | null }> };
     expect(state.messages.some((m) => m.from === deviceHash(SKYWATCH_CORE_ID))).toBe(true);
+
+    await cleanup(db);
+    await closeDb();
+  }, 60_000);
+
+  it("8e: photo upload/serve round-trip over real Mongo (mesh_photos unique photoRef; TOFU-pinned device only)", async () => {
+    const { defaultDeps } = await import("../src/deps.ts");
+    const config = loadConfig();
+    const deps = defaultDeps(config);
+    const app = createApp(config, deps);
+    const db = await getDb(config);
+    await cleanup(db);
+
+    // photoRef index surface
+    const photoIdx = indexInfo((await db.collection(COLLECTIONS.meshPhotos).indexes()) as never);
+    expect(photoIdx).toContainEqual({ key: { photoRef: 1 }, unique: true });
+
+    // pin the device with a signed packet (photos require a TOFU-pinned device)
+    const deviceId = "mesh-test-real-photo-device";
+    const signer = makeSigner(deviceId);
+    const synced = (await (await app.request("/mesh/sync", {
+      method: "POST",
+      body: JSON.stringify({ deviceId: GW, lat: 47.6, lon: -122.33, packets: [packet(signer, { id: "mesh-test-real-photo-pkt", type: "hazard", status: "broken road", photoRef: "mesh-test-real-photo-1" })] }),
+      headers: { "content-type": "application/json" },
+    })).json()) as SyncBody;
+    expect(synced.inserted).toBe(1);
+
+    const data = Buffer.from([0xff, 0xd8, 0xff, 0x01, 0x02, 0xd9]).toString("base64");
+    const post = await app.request("/mesh/photo", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, photoRef: "mesh-test-real-photo-1", data, label: "road-broken" }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(post.status).toBe(200);
+    // idempotent retry: one doc for the ref
+    await app.request("/mesh/photo", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, photoRef: "mesh-test-real-photo-1", data, label: "road-broken" }),
+      headers: { "content-type": "application/json" },
+    });
+
+    const served = await app.request("/mesh/photo/mesh-test-real-photo-1");
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toBe("image/jpeg");
+    expect(served.headers.get("cache-control")).toContain("immutable");
+
+    const doc = await db.collection(COLLECTIONS.meshPhotos).countDocuments({ photoRef: "mesh-test-real-photo-1" });
+    expect(doc).toBe(1);
+    // /mesh/state renders the resolved photo on the report
+    const state = (await (await app.request("/mesh/state")).json()) as {
+      hazardReports: Array<{ hasPhoto: boolean; photoKind: string | null; photoUrl: string | null }>;
+    };
+    expect(state.hazardReports[0]).toMatchObject({ hasPhoto: true, photoKind: "road-broken", photoUrl: "/mesh/photo/mesh-test-real-photo-1" });
+
+    // over-cap is 413 over the wire too
+    const big = await app.request("/mesh/photo", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, photoRef: "mesh-test-real-photo-big", data: Buffer.alloc(151 * 1024, 0x20).toString("base64") }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(big.status).toBe(413);
 
     await cleanup(db);
     await closeDb();

@@ -76,7 +76,15 @@ export async function assembleMeshState(
   now: number,
   resources: ResourceDoc[] = [],
 ): Promise<MeshState> {
-  const [packets, clusters] = await Promise.all([store.listPackets(), store.listBeacons()]);
+  const [packets, clusters, photos] = await Promise.all([
+    store.listPackets(),
+    store.listBeacons(),
+    store.listPhotos(),
+  ]);
+  // Task 8e: photoRef -> uploaded bytes. A packet's hasPhoto is true ONLY when its
+  // pointer resolves to actual bytes (a declared-but-never-uploaded ref renders as
+  // "no photo" — no dangling 404 links on the dashboard).
+  const byRef = new Map(photos.map((p) => [p.photoRef, p] as const));
 
   const beacons = rankBeacons(clusters).map((b) => ({
     clusterId: b.clusterId,
@@ -97,19 +105,26 @@ export async function assembleMeshState(
     .filter((p) => p.type === "hazard")
     .sort((a, b) => b.receivedAt - a.receivedAt || a.id.localeCompare(b.id))
     .slice(0, 50)
-    .map((p) => ({
-      id: p.id,
-      status: p.status,
-      lat: p.lat,
-      lon: p.lon,
-      ts: p.ts,
-      verify: p.verify,
-      score:
-        p.score === null
-          ? null
-          : Math.round(p.score * confidenceFor(MESH_DECAY_KIND, p.scoredAt, now) * 100) / 100,
-      reasons: p.reasons,
-    }));
+    .map((p) => {
+      // Task 8e photo view (dashboard gallery strip links photoUrl).
+      const photo = p.photoRef !== null ? byRef.get(p.photoRef) : undefined;
+      return {
+        id: p.id,
+        status: p.status,
+        lat: p.lat,
+        lon: p.lon,
+        ts: p.ts,
+        verify: p.verify,
+        score:
+          p.score === null
+            ? null
+            : Math.round(p.score * confidenceFor(MESH_DECAY_KIND, p.scoredAt, now) * 100) / 100,
+        reasons: p.reasons,
+        hasPhoto: photo !== undefined,
+        photoKind: photo?.kind ?? null,
+        photoUrl: photo ? `/mesh/photo/${p.photoRef}` : null,
+      };
+    });
 
   // Coverage: one dot per contributing device (its most recently received report).
   const latest = new Map<string, MeshPacketDoc>();

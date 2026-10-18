@@ -8,6 +8,8 @@
  * batch contract, and TTL decrement / hop counting happen at the relay, not here.
  */
 import type { BlockedRoad, ShelterBrief } from "../types/brief.ts";
+import type { NwsAlertPayload } from "../ingest/nws.ts";
+import type { SmokeFeature } from "../ingest/smoke.ts";
 import type { Point } from "../types/docs.ts";
 
 export const MESH_PACKET_TYPES = ["beacon", "hazard", "ack", "brief", "msg"] as const;
@@ -26,6 +28,51 @@ export const MESH_MSG_STATUS_MAX = 280;
  */
 export const SKYWATCH_ROUTE = "SKYWATCH";
 export const SKYWATCH_CORE_ID = "SKYWATCH-CORE";
+
+/**
+ * Task 8e mesh photos. `photoRef` rides the packet (pointer only — the BYTES never
+ * ride the batch: the gateway uploads them separately via POST /mesh/photo).
+ * Labels come from the gateway's browser UI (vision scoring stays a stub — label
+ * text only).
+ */
+export const MESH_PHOTO_LABELS = ["road-broken", "fire", "safe-place", "flood", "other"] as const;
+export type MeshPhotoLabel = (typeof MESH_PHOTO_LABELS)[number];
+export const MESH_PHOTO_BYTES_CAP = 150 * 1024;
+
+/** One stored photo (mesh_photos; unique photoRef). `data` is base64 (jpeg/png magic-sniffed at upload). */
+export interface MeshPhotoDoc {
+  photoRef: string;
+  deviceId: string;
+  data: string;
+  contentType: "image/jpeg" | "image/png";
+  /** Gateway-reported label, null = unlabeled. */
+  kind: MeshPhotoLabel | null;
+  ts: number;
+  bytes: number;
+}
+
+/**
+ * Task 8e satellite overlay ("when one node gets signal, the mesh gets the
+ * satellite picture"): fetched LIVE at sync (only when SKYWATCH_LIVE_SYNC=1 —
+ * default 0 keeps tests hermetic + offline-deterministic; REPLAY does not gate
+ * this), normalized through the EXISTING ingest pipeline (so dashboards + future
+ * briefs gain the data), and returned inside the bundle (never blocks: any fetch
+ * failure or 5 s timeout -> the whole section is omitted).
+ */
+export interface SatelliteSection {
+  fetchedAt: number;
+  /** bbox = gateway lat/lon ± SAT_BBOX_RADIUS_DEG; plumes ≤25, alerts ≤10. */
+  plumes: SmokeFeature[];
+  alerts: NwsAlertPayload["features"];
+  aqi: {
+    aqi: number | null;
+    pm25: number | null;
+    source: string;
+    observedMs: number;
+    lat: number;
+    lon: number;
+  } | null;
+}
 
 /** Canonical normalized rescue kinds (the packet's raw `status` is normalized at the door). */
 export const RESCUE_KINDS = ["Trapped", "Injured", "Need Rescue"] as const;
@@ -57,6 +104,8 @@ export interface MeshPacketIn {
   legacy?: unknown;
   /** Task 8b (msg only): null/absent = broadcast to the mesh; a string = direct message to that deviceId hash. */
   to?: unknown;
+  /** Task 8e: pointer to a photo the gateway will upload separately (POST /mesh/photo). */
+  photoRef?: unknown;
 }
 
 /** Shape-validated packet (normalizePacket in sync.ts). */
@@ -79,6 +128,8 @@ export interface ParsedPacket {
   legacy: boolean;
   /** Task 8b (msg only): destination deviceId hash, null = broadcast (always null for the other types). */
   to: string | null;
+  /** Task 8e: id of a photo awaiting upload by the gateway (bytes NEVER ride the batch), null = none. */
+  photoRef: string | null;
 }
 
 /**
@@ -133,6 +184,8 @@ export interface MeshPacketDoc {
   receivedAt: number;
   /** Task 8b (msg only): destination deviceId hash, null = broadcast. */
   to: string | null;
+  /** Task 8e: photo pointer (null = none). */
+  photoRef: string | null;
 }
 
 /** One mesh device (mesh_devices; unique index on deviceId). First-packet TOFU pinning. */
@@ -207,6 +260,10 @@ export interface MeshState {
     /** Stored score composed with the 30-min read-time decay (null = unscored packet). */
     score: number | null;
     reasons: string[];
+    /** Task 8e photo view: true only when the packet's photoRef RESOLVES to uploaded bytes (no dangling 404 links); null label = unlabeled. */
+    hasPhoto: boolean;
+    photoKind: MeshPhotoLabel | null;
+    photoUrl: string | null;
   }>;
   /** Anonymized coverage dots: deviceId hashed to a stable prefix + rounded location. */
   coverage: Array<{ id: string; lat: number; lon: number }>;
@@ -237,4 +294,6 @@ export interface DownlinkBundle {
   acks: Array<{ beaconClusterId: string; message: string }>;
   /** Task 8b: newest 20 mesh messages addressed to the gateway's hash or broadcast within its area — user text passed through verbatim (the template rule binds only server-COMPOSED strings). */
   messages: MeshMessageView[];
+  /** Task 8e: the live satellite snapshot for the gateway's area — present ONLY when SKYWATCH_LIVE_SYNC=1 AND every source fetch succeeded (never half-arrive). */
+  satellite?: SatelliteSection;
 }

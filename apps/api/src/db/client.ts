@@ -22,6 +22,8 @@ export const COLLECTIONS = {
   beacons: "beacons",
   /** Pinned device pubkeys (first-packet TOFU registration). */
   meshDevices: "mesh_devices",
+  /** Task 8e mesh photos (gateway-uploaded bytes; unique photoRef). */
+  meshPhotos: "mesh_photos",
 } as const;
 
 let client: MongoClient | null = null;
@@ -117,5 +119,9 @@ export async function ensureIndexes(db: Db): Promise<void> {
   ]);
   await db.collection(COLLECTIONS.meshDevices).createIndexes([
     { key: { deviceId: 1 }, name: "deviceId_1", unique: true },
+  ]);
+  // Task 8e photos: photoRef is the dedup key (idempotent gateway retries overwrite).
+  await db.collection(COLLECTIONS.meshPhotos).createIndexes([
+    { key: { photoRef: 1 }, name: "photoRef_1", unique: true },
   ]);
 }

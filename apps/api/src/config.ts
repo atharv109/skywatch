@@ -17,6 +17,8 @@ export interface Config {
   toolSecret: string | null;
   /** Optional Tiger Data (Timescale Postgres) mirror (Task 7); unset = no Tiger writes. */
   tigerDatabaseUrl: string | null;
+  /** Task 8e: allow LIVE satellite fetches during gateway sync (default 0 = tests hermetic + offline-deterministic; REPLAY does not gate this). */
+  liveSync: boolean;
   publicBaseUrl: string;
   replay: boolean;
   port: number;
@@ -57,6 +59,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     elevenlabsVoiceWebhookSecret: secret(env, "ELEVENLABS_VOICE_WEBHOOK_SECRET"),
     toolSecret: secret(env, "TOOL_SECRET"),
     tigerDatabaseUrl: secret(env, "TIGER_DATABASE_URL"),
+    liveSync: env["SKYWATCH_LIVE_SYNC"] === "1",
     publicBaseUrl: secret(env, "PUBLIC_BASE_URL") ?? `http://localhost:${env["PORT"] ?? "3000"}`,
     replay: parseReplay(env["REPLAY"] ?? "0"),
     port: parsePort(env["PORT"] ?? "3000"),

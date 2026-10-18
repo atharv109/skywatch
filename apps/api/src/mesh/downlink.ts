@@ -5,7 +5,7 @@ import type { MatchStore } from "../match/store.ts";
 import type { Lang } from "../types/brief.ts";
 import { hashPrefix, messageView } from "./state.ts";
 import type { MeshStore } from "./store.ts";
-import type { DownlinkBundle } from "./types.ts";
+import type { DownlinkBundle, SatelliteSection } from "./types.ts";
 
 /**
  * DOWNLINK BUNDLE (Task 8): the POST /mesh/sync response the gateway rebroadcasts
@@ -71,6 +71,9 @@ export async function buildDownlink(
   gateway: { deviceId: string; lat: number; lon: number },
   now: number,
   lang: Lang = "en",
+  // Task 8e: the ALREADY-FETCHED satellite snapshot (undefined/null = omitted —
+  // the fetch lives in the sync path, never inside the bundle build).
+  satellite?: SatelliteSection | null,
 ): Promise<DownlinkBundle> {
   const brief = await buildUserBrief(
     match,
@@ -106,5 +109,8 @@ export async function buildDownlink(
     blockedRoads: brief.blockedRoads,
     acks,
     messages,
+    // Optional key: present ONLY when the satellite snapshot was fetched; a
+    // section that failed to fetch is absent (never half-arrive).
+    ...(satellite ? { satellite } : {}),
   };
 }

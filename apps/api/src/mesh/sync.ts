@@ -18,6 +18,7 @@ import {
   type MeshPacketIn,
   type ParsedPacket,
   type RescueKind,
+  type SatelliteSection,
   type SkywatchChat,
   type VerifyState,
 } from "./types.ts";
@@ -97,6 +98,7 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
   if (raw.ttl !== undefined && (!isFiniteNum(raw.ttl) || raw.ttl <= 0)) return fail("ttl must be a number > 0");
   let status: string;
   let to: string | null = null;
+  let photoRef: string | null = null;
   if (type === "msg") {
     // Task 8b mesh chat: the text rides the status field, preserved VERBATIM up to
     // MESH_MSG_STATUS_MAX — a longer/absent/non-string text is shape-broken
@@ -118,6 +120,15 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
   } else {
     status = typeof raw.status === "string" ? raw.status.slice(0, 200) : "";
   }
+  // Task 8e: photoRef is a POINTER only (the bytes never ride the batch — the
+  // gateway uploads them separately via POST /mesh/photo). Any packet type may
+  // carry one.
+  if (raw.photoRef !== undefined && raw.photoRef !== null) {
+    if (typeof raw.photoRef !== "string" || raw.photoRef.length === 0 || raw.photoRef.length > 128) {
+      return fail("photoRef must be a string of 1..128 chars (a pointer — photo bytes upload via /mesh/photo)");
+    }
+    photoRef = raw.photoRef;
+  }
   const packet: ParsedPacket = {
     id,
     type,
@@ -134,6 +145,7 @@ function parsePacket(raw: MeshPacketIn): ParseResult {
     pubkey: typeof raw.pubkey === "string" && raw.pubkey.length > 0 ? raw.pubkey : null,
     legacy: raw.legacy === true,
     to,
+    photoRef,
   };
   return { ok: true, packet };
 }
@@ -201,6 +213,7 @@ function packetDoc(packet: ParsedPacket, verify: VerifyResult, score: number | n
     reasons,
     receivedAt: now,
     to: packet.to,
+    photoRef: packet.photoRef,
   };
 }
 
@@ -233,6 +246,10 @@ export async function processSync(
   // trusted-core reply is stored BEFORE the downlink build — the same sync's
   // bundle already carries the answer.
   askSkywatch?: SkywatchChat,
+  // Task 8e satellite overlay: set ONLY when SKYWATCH_LIVE_SYNC=1 (the callback
+  // itself fetches, upserts hazards, and nulls out on any failure — the bundle
+  // must never block or half-arrive).
+  satellite?: (lat: number, lon: number, now: number) => Promise<SatelliteSection | null>,
 ): Promise<SyncOutcome> {
   if (typeof body?.deviceId !== "string" || body.deviceId.length === 0 || body.deviceId.length > 128) {
     throw new SyncError("deviceId must be a string of 1..128 chars");
@@ -416,11 +433,22 @@ export async function processSync(
       reasons: ["Ask Skywatch (trusted core) — server-composed via the Task 6 chat loop + validator; never scored, never clustered"],
       receivedAt: now,
       to: askerHash,
+      photoRef: null,
     };
     if (await store.insertPacket(doc)) inserted += 1;
   }
 
-  const bundle = await buildDownlink(store, match, { deviceId: body.deviceId, lat: body.lat, lon: body.lon }, now);
+  // Task 8e: the satellite fetch happens after ALL packet work (a hang must never
+  // delay the mesh sync's stored packets) and rides the built bundle.
+  const sat = satellite ? await satellite(body.lat, body.lon, now).catch(() => null) : null;
+  const bundle = await buildDownlink(
+    store,
+    match,
+    { deviceId: body.deviceId, lat: body.lat, lon: body.lon },
+    now,
+    "en",
+    sat ?? undefined,
+  );
   return {
     received: body.packets.length,
     inserted,
