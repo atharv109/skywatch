@@ -22,7 +22,7 @@ const API_URL = new URL(process.env.SKYWATCH_API_URL || "http://localhost:3000")
 const PORT = Number(process.env.PORT || 8080);
 
 /** API route prefixes proxied to the backend (mirrors apps/api/src/routes/index.ts + /health). */
-const API_PREFIXES = ["/map", "/mesh", "/scenario", "/webhooks", "/tools", "/verify", "/roads", "/health"];
+const API_PREFIXES = ["/map", "/mesh", "/scenario", "/webhooks", "/tools", "/verify", "/roads", "/health", "/demo"];
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",

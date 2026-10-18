@@ -17,7 +17,19 @@ The user's screenshot showed the original 16-tile pack ending on screen. Expande
 
 Re-verified (headless Chromium 390×844): 16 tile requests during the screenshot run — all same-origin from the local pack, zero external tile hosts; `node --check` passes on app.js + sw.js.
 
-## What shipped
+## Follow-up 2 — on-device Home + scroll + Directs (same batch)
+
+Fixes for the three on-device findings, verified headless Chromium 390×844 (scroll assertions: wheel & touch swipes change `.screen.active` scrollTop in the natural direction on Home AND Mesh; all 6 gestures pass):
+
+- **Onboarding without secrets**: the browser-signed per-text webhook flow in onboarding is replaced — texts are collected in-thread and ONE same-origin `POST /demo/signup {phone, platform:"sms", texts}` fires at finish; the response `{userId, lang, brief, mapLink}` renders the brief on Home immediately and stores `userId` in config for later byPhone reads (`fetchBrief` now appends `?user=<userId>`). Offline at signup: the texts queue as `pendingDemoSignup` and the POST drains on the next signal (restoreOnline). `403/404` → honest inline card on Home ("Demo signup is off on this server — enter the server's TOOL_SECRET…") wired to the existing secret field; the manual byPhone path untouched.
+- **Area-brief fallback**: with no personal brief, Home silently `POST /demo/area-brief {lat, lon}` (device position if shared, else demo center), renders it as the safety brief with an "area brief — sign up for personalized alerts" chip + a one-text join button; refresh throttled to ≥60 s; the honest empty state now only appears when BOTH routes are absent (`/demo/area-brief` proven 403/404/dead). Also fixes an offline-boot forever-skeleton (skeleton gated on `loading.brief` alone). /911 bar now reflects the viewed brief (personalized or area).
+- **Scroll**: everything scrolls natively — added `touch-action: pan-y` + `-webkit-overflow-scrolling: touch` + `overscroll-behavior: contain` to every scrollable surface (screens, sheet, onboard, modal; gallery pan-x); `touch-action:none` stays ONLY on the map canvas; on-device (≤520px) the shell itself no longer scrolls/rubber-bands (`html,body overflow:hidden` at that width + `overscroll-behavior:none` globally) — the nested body bounce is what read as inverted scroll. No custom drag handlers exist (verified: the only touch JS is on the map canvas, and nav taps don't scroll-swipe).
+- **DIRECTS delivery**: merged view already carries (a) my sent DMs from the queue, (b) `/mesh/state` messages with `to === myDeviceHash` as received bubbles (hashed `from` label), (c) downlink-bundle messages; now with a 2 s mesh-state poll in online/gateway (draft-preserving in-place render, focus only if it was in the box), a Directs tab badge + per-thread "new" chip for unseen `to:me` DMs (stamps seen on view), and the compose-bar line "Delivered through the mesh's next node with signal — even while your status bar says No Service."
+- SW `CACHE_VERSION` → `sw-v4`; `/demo` added to the pass-through prefix list in sw.js + the harness proxy (server.mjs). Never cached, always live.
+
+Screenshots: `map-ui-home-brief.png` (personalized), `map-ui-home-area.png` (area fallback + join), `map-ui-directs.png` (received-DM thread + badge behavior asserted).
+
+## What shipped (original build)
 
 ### 1. Offline tile pack (committed, no network at demo time)
 - 16 tiles, 0.74 MB total (≤ 3 MB cap), all valid 256×256 PNGs (PNG magic + IHDR verified; 16/16 unique).

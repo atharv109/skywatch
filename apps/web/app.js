@@ -99,7 +99,7 @@
   function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (_e) { /* storage unavailable — session only */ } }
 
   function loadAll() {
-    state.cfg = lsGet(LS.cfg, { api: "", toolSecret: "", photonSecret: "" });
+    state.cfg = lsGet(LS.cfg, { api: "", toolSecret: "", photonSecret: "", userId: "" });
     const q = new URLSearchParams(location.search);
     if (q.get("api")) state.cfg.api = q.get("api").replace(/\/+$/, "");
     state.profile = lsGet(LS.profile, {});
@@ -127,15 +127,18 @@
     brief: null, mapState: null, meshState: null,
     syncState: null,           // last POST /mesh/sync outcome + at
     bundle: null,              // last downlink bundle
+    areaBrief: null,           // /demo/area-brief fallback { data, at } — Home's no-signup brief
+    areaNote: null,            // "off" once /demo/area-brief proved absent on this server
     tab: "home",
     identity: null,            // per-session Ed25519 identity
     ob: null,                  // onboarding flow state
     meshView: "neighbors",     // 'neighbors' | 'directs' | 'skywatch' — Mesh sub-surface
     dmPeer: null,              // selected DIRECTS peer device hash
+    dmSeenAt: 0,               // newest received-DM ts already seen (Directs badge)
     composerPhoto: null,       // { ref, data, kb } attached before send; uploads after the sync
     polls: {},                 // timers
     healthTimer: null,
-    loading: { brief: true, map: true, mesh: true },
+    loading: { brief: true, map: true, mesh: true, area: false },
     lastErrors: {}, fails: {},
   };
 
@@ -274,6 +277,11 @@
     if (state.queue.length > 0) {
       try { await syncGateway({ silent: true }); toast("Your queued reports went out with the sync.", "ok"); }
       catch (_e) { toast("Queue still pending — try the gateway in Mesh.", "warn"); }
+    }
+    if (state.flags.pendingDemoSignup) { // onboarding that finished dark — sign up now
+      const texts = state.flags.pendingDemoSignup || [];
+      state.flags.pendingDemoSignup = null; persist.flags();
+      void signUpDemo(texts);
     }
     if (state.flags.pendingSummary) {
       state.flags.pendingSummary = false; persist.flags();
@@ -472,9 +480,11 @@
   async function fetchBrief(quiet) {
     if (!isSignedUp()) return;
     state.loading.brief = true;
+    // demo round-trip: /demo/signup stored this device's userId — byPhone reads carry it
+    const uid = state.cfg.userId ? "?user=" + encodeURIComponent(state.cfg.userId) : "";
     const phone = state.profile.phone;
     const result = await guarding(async () => {
-      return apiFetch(`/tools/brief/byPhone/${state.profile.platform}/${phone}`, { timeoutMs: 8000 });
+      return apiFetch(`/tools/brief/byPhone/${state.profile.platform}/${phone}${uid}`, { timeoutMs: 8000 });
     }, "brief");
     state.loading.brief = false;
     if (!result) return;
@@ -518,6 +528,79 @@
     state.meshState = result.json;
     cacheData("mesh", result.json);
     renderMeshBadge();
+    // a fresh mesh state re-renders the open Mesh surface in place (drafts kept; focus only if it was in the box)
+    if (state.tab === "mesh") {
+      const ta = $("#meshText", screens.mesh);
+      const draft = ta ? ta.value : "";
+      const wasFocused = ta && document.activeElement === ta;
+      renderMesh();
+      const ta2 = $("#meshText", screens.mesh);
+      if (ta2 && draft) { ta2.value = draft; $("#meshCount", screens.mesh).textContent = String(280 - draft.length); if (wasFocused) ta2.focus(); }
+    }
+  }
+
+  /* ---- demo round-trip: single same-origin POST signup (browser-held secrets are
+   * not on the phone) + the no-brief fallback POST /demo/area-brief. Both are
+   * optional server gates: 403/404 flips to the honest manual-TOOL_SECRET path. ---- */
+
+  async function signUpDemo(texts) {
+    // server contract (apps/api/src/routes/demo.ts): texts 1..5 × ≤140 chars, non-empty
+    texts = (texts || []).map((t) => String(t).trim()).filter(Boolean).slice(0, 5);
+    const phone = state.profile.phone;
+    let result = null;
+    try {
+      result = await apiFetch("/demo/signup", {
+        method: "POST",
+        body: { phone, platform: state.profile.platform || "sms", texts },
+        timeoutMs: 9000,
+      });
+    } catch (_e) {
+      // no signal at signup time — the texts are already in the thread; send the
+      // round-trip when connectivity returns (auto-detect drains it)
+      state.flags.pendingDemoSignup = texts || []; persist.flags();
+      return;
+    }
+    state.flags.pendingDemoSignup = null;
+    if (result.ok && result.json) {
+      const j = result.json;
+      if (j.userId) { state.cfg.userId = j.userId; lsSet(LS.cfg, state.cfg); } // later byPhone reads
+      if (j.lang && !state.profile.lang) { state.profile.lang = j.lang; persist.profile(); }
+      if (j.brief) { state.brief = j.brief; state.briefNote = null; cacheData("brief", j.brief); }
+      state.flags.demoSignupOff = false; persist.flags();
+      if (j.mapLink) threadPush("system", "Live area map: " + j.mapLink, "note");
+      toast("Signed up — your brief is on Home.", "ok");
+      persist.flags();
+      renderHome();
+    } else if (result.status === 403 || result.status === 404) {
+      // server gate off (or endpoint not deployed) — keep the old manual path
+      state.flags.demoSignupOff = true; persist.flags();
+      toast("Demo signup is off on this server — byPhone path still works.", "warn");
+      renderHome();
+    }
+  }
+
+  async function fetchAreaBrief(force) {
+    if (state.brief) return null;
+    // throttle: force-refresh re-POSTs at most once a minute (cached copy always renders)
+    if (state.areaBrief && (!force || Date.now() - state.areaBrief.at < 60000)) return state.areaBrief;
+    state.loading.area = true;
+    let result = null;
+    const loc = myLoc();
+    try {
+      result = await apiFetch("/demo/area-brief", { method: "POST", body: { lat: loc.lat, lon: loc.lon }, timeoutMs: 8000 });
+    } catch (_e) {
+      state.loading.area = false; state.areaNote = "off"; return null; // absent/dark — honest empty state remains
+    }
+    state.loading.area = false;
+    if (result.ok && result.json) {
+      const data = result.json.brief || result.json;
+      state.areaBrief = { data, at: Date.now() };
+      cacheData("areaBrief", state.areaBrief);
+      if (state.tab === "home") renderHome(); // land it without a tap
+      return state.areaBrief;
+    }
+    state.areaNote = "off";
+    return null;
   }
 
   function pollOnce() {
@@ -529,8 +612,14 @@
   function startPolling() {
     stopPolling();
     state.polls.tick = setInterval(() => { if (!document.hidden) pollOnce(); }, 12000);
+    // fast mesh-state poll (2 s, online/gateway): a DM delivers the moment ANY
+    // connectivity exists — no user action, no waiting on the slow brief cycle
+    state.polls.mesh = setInterval(() => {
+      if (document.hidden) return;
+      if (state.mode === "online" || state.mode === "gateway") void safe(fetchMeshState());
+    }, 2000);
   }
-  function stopPolling() { if (state.polls.tick) clearInterval(state.polls.tick); state.polls.tick = null; }
+  function stopPolling() { if (state.polls.tick) clearInterval(state.polls.tick); state.polls.tick = null; if (state.polls.mesh) clearInterval(state.polls.mesh); state.polls.mesh = null; }
 
   function isSignedUp() { return !!(state.profile && state.profile.phone); }
   function isOnboarded() { return !!(state.profile && state.profile.onboarded); }
@@ -646,6 +735,7 @@
     threadPush("system", "Signed up — Skywatch now texts this number.", "note");
     toast("You're signed up. Texts land in Home.", "ok");
     renderHome();
+    void signUpDemo(state.ob ? (state.ob.texts || []).slice() : []); // one same-origin POST — brief lands on Home
     // on actual phones the floating chip can't show — walkthrough fires here
     if (window.innerWidth <= 520 && !state.flags.walkSeen) openWalkthrough();
     resyncAll(true).then(() => {
@@ -660,22 +750,15 @@
   }
 
   async function obSend(text, mirroredReply, next) {
-    // real webhook first (if online)
-    if (state.mode === "online") {
-      const res = await sendTextWebhook(text);
-      if (res.network || res.status >= 500) {
-        threadPush("user", text, "ob");
-        toast("Signal dropped mid-signup — report queued.", "mesh");
-        degrade("onboarding");
-        return false;
-      }
-      threadPush("user", text, res.ok ? "ob" : "ob-err");
-      if (!res.ok) { toast("Webhook refused the message (" + res.status + ")", "warn"); }
-      else if (mirroredReply) threadPush("bot", mirroredReply, "mirror");
-    } else {
-      threadPush("user", text, "queued");
-      toast("Saved in the thread — will send when one of us gets signal.", "mesh");
+    // demo round-trip: no per-text webhook POSTs from the browser — the texts
+    // are collected here and go out in ONE /demo/signup POST at finish.
+    state.ob = state.ob || { texts: [] };
+    state.ob.texts.push(text);
+    threadPush("user", text, state.mode === "online" ? "ob" : "queued");
+    if (state.mode !== "online") {
+      toast("Saved in the thread — signs up when one of us gets signal.", "mesh");
     }
+    if (mirroredReply) threadPush("bot", mirroredReply, "mirror");
     return true;
   }
 
@@ -846,6 +929,36 @@
     } else if (existing) existing.remove();
   }
 
+  /**
+   * Sign one queued packet exactly per src/mesh/sig.ts (msg = id|type|ts|lat|lon|deviceId;
+   * sig + pubkey travel as raw base64). Used by syncGateway and handed to the native
+   * BLE transport through the seam at the bottom of boot() — the same packet engine.
+   */
+  async function signedPacketFor(p, identity) {
+    const full = {
+      id: p.id,
+      type: p.kind,
+      status: p.kind === "msg" ? p.text : p.status,
+      lat: p.lat,
+      lon: p.lon,
+      ts: p.ts,
+      hops: 0,
+      ttl: 7,
+      deviceId: identity.deviceId,
+    };
+    if (identity.legacy) {
+      full.legacy = true;
+    } else {
+      full.pubkey = identity.pubB64;
+      const msg = [full.id, full.type, full.ts, full.lat, full.lon, full.deviceId].map(String).join("|");
+      const sig = await crypto.subtle.sign("Ed25519", identity.priv, new TextEncoder().encode(msg));
+      full.sig = bytesToRawB64(new Uint8Array(sig));
+    }
+    if (p.to) full.to = p.to; // DM routing (peer hash or SKYWATCH) — added after signing so the sig contract holds
+    if (p.photoRef) { full.photoRef = p.photoRef; if (p.label) full.label = p.label; }
+    return full;
+  }
+
   /** POST /mesh/sync — sign every queued packet exactly per src/mesh/sig.ts. */
   async function syncGateway(opts) {
     opts = opts || {};
@@ -854,28 +967,9 @@
     const packets = [];
     const q = state.queue.filter((p) => p.state === "queued" || p.state === "fail");
     for (const p of q) {
-      const full = {
-        id: p.id,
-        type: p.kind,
-        status: p.kind === "msg" ? p.text : p.status,
-        lat: p.lat,
-        lon: p.lon,
-        ts: p.ts,
-        hops: 0,
-        ttl: 7,
-        deviceId: identity.deviceId,
-      };
-      if (identity.legacy) {
-        full.legacy = true;
-      } else {
-        full.pubkey = identity.pubB64;
-        const msg = [full.id, full.type, full.ts, full.lat, full.lon, full.deviceId].map(String).join("|");
-        const sig = await crypto.subtle.sign("Ed25519", identity.priv, new TextEncoder().encode(msg));
-        full.sig = bytesToRawB64(new Uint8Array(sig));
-      }
-      if (p.to) full.to = p.to; // DM routing (peer hash or SKYWATCH) — added after signing so the sig contract holds
-      if (p.photoRef) { full.photoRef = p.photoRef; if (p.label) full.label = p.label; }
-      packets.push(full);
+      // Packets that arrived pre-signed over the native BLE mesh (p.remote.signed)
+      // are relayed untouched under the origin device's sig — never re-signed here.
+      packets.push(p.remote ? p.remote.signed : await signedPacketFor(p, identity));
     }
     if (packets.length === 0) {
       if (!opts.silent) toast("The mesh queue is clear.", "mesh");
@@ -923,6 +1017,43 @@
     persist.queue();
     if (!opts.silent) toast("Gateway sync refused (" + (result.status || "network") + ")", "warn");
     return null;
+  }
+
+  /**
+   * Ingest packets received peer-to-peer over the native BLE transport (already
+   * signed by the origin device). Same packet engine, same dedup contract (by id)
+   * the server enforces again at /mesh/sync. They keep riding the queue — when
+   * this device has signal, syncGateway relays them to the API as-is.
+   */
+  function ingestRemotePackets(signedPackets) {
+    if (!Array.isArray(signedPackets)) return 0;
+    let added = 0;
+    for (const sp of signedPackets) {
+      if (!sp || !sp.id || !sp.deviceId) continue;
+      if (state.queue.some((p) => p.id === sp.id)) continue; // dedup by id — no relay loops
+      state.queue.push({
+        id: sp.id,
+        kind: sp.type || "msg",
+        status: sp.type === "msg" ? "" : String(sp.status || ""),
+        text: sp.type === "msg" ? String(sp.status || "") : "",
+        to: sp.to || "",
+        photoRef: sp.photoRef || null,
+        label: sp.label || "",
+        lat: +sp.lat || 0,
+        lon: +sp.lon || 0,
+        ts: +sp.ts || Date.now(),
+        queuedAt: Date.now(),
+        state: "queued",
+        remote: { signed: sp }, // never re-signed here — hops is the only mutable field (sig excludes it)
+      });
+      added++;
+    }
+    if (added) {
+      persist.queue();
+      renderMeshBadge();
+      if (state.mode === "online" || state.mode === "gateway") void safe(syncGateway({ silent: true }));
+    }
+    return added;
   }
 
   /** POST pending photo uploads (LS) to the real photo store; batched after each sync. */
@@ -993,20 +1124,50 @@
       return;
     }
 
-    const skeleton = !brief && (state.loading.brief || !state.cache.brief);
+    const skeleton = !brief && state.loading.brief; // loading a real (personal) brief only — offline boots fall through to the area route
     const syncedAt = briefSrc && !briefSrc.live ? briefSrc.at : null;
+    // no personal brief (not signed up yet / fetch failed): the area-brief route
+    // fills Home — device position if shared, else the demo center
+    const areaSrc = brief === null && !skeleton ? cached("areaBrief") : null;
+    const area = areaSrc ? areaSrc.data : null;
+    const briefView = brief || area; // one renderer, two sources
+    const isArea = !brief && !!area;
 
     el.innerHTML = `
       <div class="stagger">
         ${syncedAt ? `<p class="mini dim" style="margin-bottom:8px">Cached from ${esc(fmtAgo(syncedAt))} — live sync waits for signal</p>` : ""}
         <div class="sec-label" style="margin-top:2px">Your safety brief<small>${esc(myLoc().label)}</small></div>
+        ${state.flags.demoSignupOff ? `
+          <div class="card" style="border-color:rgba(240,163,78,.35);margin-bottom:10px">
+            <b style="font-size:14px;font-family:var(--fd)">Demo signup is off on this server</b>
+            <p class="mini dim2" style="margin-top:4px">Enter the server's TOOL_SECRET and Home reads your brief via byPhone — the manual path still works.</p>
+            <button class="btn btn-ghost btn-block" id="openSecret" style="margin-top:10px">Add the server's TOOL_SECRET</button>
+          </div>` : ""}
         ${skeleton ? `
           <div class="skel" style="height:92px;margin-bottom:10px"></div>
           <div class="skel" style="height:150px;margin-bottom:10px"></div>
           <div class="skel" style="height:118px"></div>
-        ` : brief === null ? `
-          <div class="empty">${ICONS.shield}<b>No brief yet</b><p>${esc(state.briefNote || "Skywatch is assembling your brief the moment your signup lands in its pipeline.")}</p></div>
+        ` : brief === null ? (area ? `
+          <div class="chips" style="margin:0 0 10px">
+            <span class="chip chip-n">area brief — sign up for personalized alerts</span>
+            <span class="chip chip-ok">${ICONS.shieldS} covers your area</span>
+          </div>
+          <div class="card">
+            <div class="hz-line">
+              <span style="font-family:var(--fd);font-weight:700;font-size:15px">${(area.hazards || []).length ? "Current hazards" : "All clear in your area"}</span>
+              ${(area.hazards || []).length ? `<span class="chip chip-danger sev">${area.hazards.length} active</span>` : `<span class="chip chip-ok sev">clear</span>`}
+            </div>
+            <div class="hz-timing" id="homeHaz"></div>
+          </div>
+          <div id="hazards"></div>
+          <div class="card" style="margin-top:10px">
+            <b style="font-size:14px;font-family:var(--fd)">Want this by text?</b>
+            <p class="mini dim2" style="margin-top:4px">One text signs you up — personalized hazards, updates and a voice check-in when it matters.</p>
+            <button class="btn btn-primary btn-block" id="homeJoin" style="margin-top:10px">Sign up — one text</button>
+          </div>
         ` : `
+          <div class="empty">${ICONS.shield}<b>${state.loading.area && !state.areaNote ? "Assembling the area brief around you…" : "No brief yet"}</b><p>${esc(state.briefNote || (state.areaNote ? "No area brief on this server yet, and no personalized brief — finish signup to get yours." : "Skywatch is assembling your brief the moment your signup lands in its pipeline."))}</p></div>
+        `) : `
           <div class="card">
             <div class="hz-line">
               <span style="font-family:var(--fd);font-weight:700;font-size:15px">${hasHazards ? "Current hazards" : "All clear in your area"}</span>
@@ -1022,6 +1183,11 @@
         <div id="homeSource"></div>
       </div>`;
 
+    const secretBtn = $("#openSecret", el);
+    if (secretBtn) secretBtn.addEventListener("click", () => openConfigModal(false));
+    const joinBtn = $("#homeJoin", el);
+    if (joinBtn) joinBtn.addEventListener("click", startOnboarding);
+
     if (state.mode === "offline") {
       const chip = document.createElement("div");
       chip.className = "card";
@@ -1032,8 +1198,13 @@
     }
 
     if (!skeleton && brief) renderBriefParts(el, brief);
+    if (!skeleton && isArea) {
+      renderBriefParts(el, area);
+      if (!state.flags.demoSignupOff) void fetchAreaBrief(true); // silent refresh — cached copy renders instantly
+    }
+    if (brief === null && !skeleton && !area && !state.areaNote) void fetchAreaBrief(); // both-routes-absent gate before the empty state
     if (!skeleton) renderIncoming(el);
-    render911(el);
+    render911(el, briefView);
   }
 
   const ICONS_QUEUE = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-2px" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h6"/></svg>';
@@ -1138,8 +1309,8 @@
     $("#openThread", zone).addEventListener("click", openThreadSheet);
   }
 
-  function render911(el) {
-    const brief = state.brief || (cached("brief") || {}).data || null;
+  function render911(el, viewBrief) {
+    const brief = viewBrief || state.brief || (cached("brief") || {}).data || null;
     const hasHazards = brief && brief.hazards && brief.hazards.length > 0;
     let target = el.querySelector("#home911");
     if (!target) {
@@ -2055,6 +2226,10 @@
     });
     Object.values(threads).forEach((arr) => arr.sort((a, b) => a.ts - b.ts));
     const dmArr = (state.dmPeer && threads[state.dmPeer]) || [];
+    /* DIRECTS badge: received DMs (to === my hash) not seen yet — mesh state poll
+     * (every 2 s online/gateway) lands them without any user action */
+    const dmUnseen = view === "directs" ? 0 : (meId ? feed.filter((m) => m.to === meId && !CORE_RE.test(m.from) && m.ts > (state.dmSeenAt || 0)).length : 0);
+    const peerNew = (arr) => arr.some((m) => m.to === meId && !CORE_RE.test(m.from) && m.ts > (state.dmSeenAt || 0));
     const directsHtml = state.dmPeer
       ? `<div class="sec-label" style="margin-top:2px"><button class="reply-btn" data-dm-back aria-label="All threads">← threads</button>&nbsp;→ <span class="chip chip-mono chip-mesh">${esc(state.dmPeer)}</span></div>
           <div class="chatwrap">${dmArr.map((m) => bubbleHtml(m, meId, false)).join("") || '<div class="empty">' + ICONS.sms + '<b>New direct thread</b><p>You and ' + esc(state.dmPeer) + ' — what you send here rides the mesh, relayed by a node with signal.</p></div>'}</div>`
@@ -2065,6 +2240,7 @@
               return `<button class="mode-row" data-peer="${esc(peer)}">
                 <div class="mode-ic ic-off">${ICONS.sms}</div>
                 <div style="flex:1;min-width:0"><b class="chip-mono">${esc(peer)}</b><span class="sub">${esc(last.text.slice(0, 44))}${last.text.length > 44 ? "…" : ""}</span></div>
+                ${peerNew(arr) ? '<span class="chip chip-ok">new</span>' : ""}
                 <span class="mono dim">${esc(fmtAgo(last.ts))}</span>
               </button>`;
             }).join("")
@@ -2119,7 +2295,7 @@
 
     const meshTabs = `<div class="mesh-tabs" role="tablist" aria-label="Mesh surfaces">
       <button class="mesh-tab" data-mview="neighbors" role="tab" aria-pressed="${view === "neighbors"}">${ICONS.meshOn} Neighbors</button>
-      <button class="mesh-tab" data-mview="directs" role="tab" aria-pressed="${view === "directs"}">${ICONS.sms} Directs</button>
+      <button class="mesh-tab" data-mview="directs" role="tab" aria-pressed="${view === "directs"}">${ICONS.sms} Directs${dmUnseen ? `<span class="tab-badge">${dmUnseen}</span>` : ""}</button>
       <button class="mesh-tab sky" data-mview="skywatch" role="tab" aria-pressed="${view === "skywatch"}">${ICONS.shieldS} Skywatch</button>
     </div>`;
 
@@ -2142,8 +2318,12 @@
           </div>`
         : "";
       const ph = view === "neighbors" ? "What's happening around you?" : view === "directs" ? (state.dmPeer ? "Direct message — relayed by a node with signal." : "Pick a neighbor's thread above, or reply from NEIGHBORS.") : "Ask Skywatch — facts from your area brief.";
+      const direct = view === "directs"
+        ? `<p class="mini dim2" style="margin:0 2px">Delivered through the mesh's next node with signal — even while your status bar says No Service.</p>`
+        : "";
       return `<div class="composer card" style="margin-top:14px">
         ${target}
+        ${direct}
         ${photo}
         <textarea id="meshText" maxlength="280" placeholder="${esc(ph)}" aria-label="mesh message"></textarea>
         <div class="composer-foot">
@@ -2210,6 +2390,11 @@
     if (gwRetry) gwRetry.addEventListener("click", async () => { try { await syncGateway(); renderMesh(); } catch (_e) { renderMesh(); } });
     const gwRestore = $("#gwRestore", el);
     if (gwRestore) gwRestore.addEventListener("click", () => { state.netOverride = null; setMode("online", { quiet: true }); });
+    if (view === "directs" && meId) {
+      // opening/being in Directs marks every DM addressed to me as seen
+      const newest = feed.filter((m) => m.to === meId && !CORE_RE.test(m.from)).reduce((mx, m) => Math.max(mx, +m.ts || 0), 0);
+      if (newest > (state.dmSeenAt || 0)) state.dmSeenAt = newest;
+    }
     renderMeshSigChip();
   }
 
@@ -2542,6 +2727,7 @@
         api,
         toolSecret: tool || state.cfg.toolSecret || "",
         photonSecret: photon || state.cfg.photonSecret || "",
+        userId: state.cfg.userId || "",
       };
       lsSet(LS.cfg, state.cfg);
       wrap.hidden = true;
@@ -2736,6 +2922,15 @@
     startHealthRetry(); // queued packets from a past session drain even without a mode transition
     // debug hook (harmless; also lets the lead inspect live state from the console)
     window.__sky = { state, view, refit: () => { fitAll(); drawMap(); }, draw: drawMap, ensureIdentity, queuePacket, syncGateway };
+
+    /* Native BLE transport seam — runs ONLY in the Capacitor native build, where
+     * apps/native/sync-web.mjs injects window.SKYWATCH_NATIVE and loads native-ble.js.
+     * The browser build never sets the flag: the hotspot/gateway path above is untouched. */
+    if (window.SKYWATCH_NATIVE && typeof window.skywatchBleTransport === "function") {
+      void window.skywatchBleTransport({
+        state, signedPacketFor, ingestRemotePackets, syncGateway, persist, ensureIdentity, toast,
+      });
+    }
   }
 
   function renderOnLoadIdentity() {

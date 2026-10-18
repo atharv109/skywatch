@@ -8,7 +8,7 @@
  *
  * Bump CACHE_VERSION when you change the precache list to force a refresh.
  */
-const CACHE_VERSION = "sw-v3";
+const CACHE_VERSION = "sw-v4";
 
 /* offline tile pack — the ONLY map tiles the demo may ever load (no network
  * tiles at runtime; the pack ships with the app). Keep in sync with the tileKeys
@@ -38,7 +38,7 @@ const PRECACHE = [
 
 /** API prefixes — identical to the harness proxy in apps/web/server.mjs. Never cached. */
 const API_PREFIXES = [
-  "/map", "/mesh", "/scenario", "/webhooks", "/tools", "/verify", "/roads", "/health",
+  "/map", "/mesh", "/scenario", "/webhooks", "/tools", "/verify", "/roads", "/health", "/demo", /* demo round-trip: /demo/signup · /demo/area-brief */
 ];
 
 self.addEventListener("install", (event) => {
