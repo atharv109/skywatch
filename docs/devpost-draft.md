@@ -42,7 +42,7 @@ JavaScript, TypeScript, Node.js, Hono, MongoDB Atlas, Photon 2.0, ElevenLabs, Ge
 - **Title: Community Kitchen** — emergency response + equity story (one household in any language when a county alert can't)
 - **Photon** — built on Photon 2.0: live iMessage + SMS number; voice via the SMS number over SIP to ElevenLabs
 - **SideShift** — who pays: municipalities and county emergency offices (they already mass-mail evacuation info; Skywatch is per-household, verified-shelter outreach in 6 languages) — how it spreads: partner check-ins make every participating nonprofit a node; signups spread by neighbor-to-neighbor mesh, the same channel as the disaster news
-- **VEYZL** — real PR audit: before/after validator commits + screenshots in the demo end-card
-- **MLH prizes** — Gemini (wording), MongoDB Atlas (records + geo), Tiger Data (status history mirror, env-gated), domain via GoDaddy Registry
+- **SpaceX — "Make it Legendary"** — built with Cursor (the shipped client); the project uses the **Grok Voice API** (xAI): the post-call recap is synthesized by Grok TTS in the household's language (es-MX/zh/vi/ar-SA/en — elevenlabs carries Tagalog, which Grok's voice catalog lacks yet); real satellite-derived data (NOAA smoke plumes, live at sync) descends to phones with no bars in the downlink bundle — space data reaching people when everything else is dead; planning sessions run through Grok Bot (screenshots in the repo)
+- **MLH prizes** — Gemini (wording), MongoDB Atlas (records + geo + photo/receipt storage), Tiger Data (status history mirror, env-gated), domain via GoDaddy Registry
 ```
 (Submission checklist: repo linked, video shows call + text follow-up + VEYZL fix, all tracks opt-in, 70%+ code this weekend ✓)
