@@ -239,6 +239,24 @@ describe("Task 8g: POST /demo/area-brief (point brief from current map data, no 
   });
 });
 
+describe("Task 8g: GET /b/:id (brief map-link page, id-injected)", () => {
+  it("serves the copied b.html with window.SKYWATCH_BRIEF_ID injected before </head>; a garbage id is a 404", async () => {
+    const h = harness(); // route is static-file serving: no gate, no store involved
+    const id = "6f48aa91c2e77b3d5601a2bb";
+    const res = await h.app.request(`/b/${id}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain(`window.SKYWATCH_BRIEF_ID="${id}"`);
+    expect(html.indexOf(`window.SKYWATCH_BRIEF_ID="${id}"`)).toBeLessThan(html.indexOf("</head>"));
+    expect(html).toContain("Skywatch"); // the actual page body rode the injection
+    // uppercase/short/naked ids are never an injection surface
+    expect((await h.app.request("/b/ABCDEF")).status).toBe(404);
+    expect((await h.app.request("/b/short")).status).toBe(404);
+    expect((await h.app.request("/b/<script>")).status).toBe(404);
+  });
+});
+
 // Real-Mongo block: the demo route over defaultDeps (same real signup path the
 // webhook route serves; cleans ONLY its own keys).
 describe.skipIf(!process.env.MONGODB_URI)("real Mongo: /demo/signup + /demo/area-brief (8g)", () => {

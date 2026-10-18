@@ -75,8 +75,10 @@
     return headers;
   }
 
-  // PUBLIC_BASE_URL + "/b/" + userId — accept the id from ?id= or the /b/<id> path
-  var id = new URLSearchParams(location.search).get("id") || (location.pathname.match(/\/b\/([^/.]+)/) || [])[1] || "";
+  // PUBLIC_BASE_URL + "/b/" + userId — the API route /b/:id serves this page with
+  // window.SKYWATCH_BRIEF_ID injected (preferred); ?id= and the /b/<id> path stay
+  // as fallbacks for the static/preview hosting paths.
+  var id = window.SKYWATCH_BRIEF_ID || new URLSearchParams(location.search).get("id") || (location.pathname.match(/\/b\/([^/.]+)/) || [])[1] || "";
   var body = $("#bbody");
 
   function skeleton() {
