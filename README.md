@@ -1,10 +1,94 @@
-# skywatch
+<p align="center">
+  <img src="apps/web/brand/logo.png" alt="Skywatch logo — a small shield with a watchful mark" width="88">
+</p>
 
-Backend for Skywatch — DubHacks '26. Public hazard data -> one household, one language, one verified shelter.
+# Skywatch
 
-Monorepo: `apps/api` (this backend, fully built), `apps/web` + `apps/vision` (placeholder teammates' surfaces). Node 20, TypeScript, Hono, native `mongodb` driver, vitest. On deploy, `apps/api`'s build also copies `apps/web` to `apps/api/public/` and serves it same-origin, so the PWA demo app installs on phones straight from the Render URL.
+> **Emergency updates that keep working when the towers don't.**
 
-## Architecture
+Official alerts go to a whole county, in English, and don't know which shelter is open. Skywatch teaches each household what to do — in its own language, over text or a phone call — and when the network dies, the phones around you *become* the network.
+
+<p align="center">
+  <a href="https://youtu.be/F6wOvyp8ZXY" title="Watch the demo (backup video)">
+    <img src="https://img.youtube.com/vi/F6wOvyp8ZXY/hqdefault.jpg" alt="Skywatch demo video — watch on YouTube" width="560">
+  </a>
+</p>
+
+**[▶ Watch the demo video](https://youtu.be/F6wOvyp8ZXY)** (backup) · **[🚀 Try the live app](https://skywatch-9kvd.onrender.com/app.html)** · **[🎬 Demo checklist](docs/video-script.md)**
+
+*(DubHacks '26 — all screenshots below are the deployed app at [skywatch-9kvd.onrender.com](https://skywatch-9kvd.onrender.com/app.html).)*
+
+---
+
+## 🔥 The problem
+
+- **County-wide, when risk is a house.** A King County alert reaches 2 million people at once — it has never met *your* household, your address, or your commute.
+- **English-only, when everyone isn't.** During the September 2020 smoke event, the official alert arrived in English — for Spanish, Mandarin, Tagalog, Vietnamese and Arabic speakers, it might as well not have arrived.
+- **No shelter truth.** The alert doesn't say where to go, and nothing tells you whether that shelter is open *right now* — or closed, full, or stale.
+
+## 🛰️ What Skywatch does
+
+| | | |
+|---|---|---|
+| **Per-household briefs, in code** | Six public data feeds (NWS alerts, NOAA HMS smoke plumes, AirNow, USGS gauges, WSDOT cameras, FEMA shelters) are matched to *your* exact location. A rule table builds your action list **in code**; the LLM only rewords the finished brief — and a validator rejects any word, place or number that isn't in it. Hallucinate anyway → fallback to pre-translated templates. | <img src="docs/screenshots/app-home-brief.png" alt="Home screen: your safety brief with 5 active hazards, smoke plume cards and severity chips" width="260"> |
+| **Text + call, in 6 languages** | Signup is 2 texts (address or ZIP, then language: English, Spanish, Mandarin, Tagalog, Vietnamese, Arabic). Deliveries go out by SMS/iMessage (Photon) and as voice calls, with a post-call summary and a follow-up chat — "is the shelter still open?" — answered only from verified facts. | <img src="docs/screenshots/app-languages.png" alt="Onboarding: pick your language for alerts from six options" width="260"> |
+| **Shelters you can trust** | Partners and community centers are check-in **called** by voice agents; every verdict carries a confidence that fades as it ages (30-min half-life shelters, 15-min roads). Below 50% it reads **unknown** — Skywatch would rather say "I don't know" than send you somewhere closed. | <img src="docs/screenshots/app-shelter-sheet.png" alt="Shelter card: El Centro de la Raza, OPEN, verified just now, confidence 60%, glowing orange route line" width="260"> |
+| **The offline mesh** | Towers die → every phone still has radios. Signed packets relay phone-to-phone over a Wi-Fi island (Ed25519, store-and-forward, dedup); the moment *any* node touches one bar, it automatically becomes the gateway: beacons up ("responders have seen your beacon"), briefs + verified shelters back down, in your language. No button. | <img src="docs/screenshots/app-mesh-ask.png" alt="Mesh tab with Neighbors, Directs and Skywatch chips and a live Ask Skywatch thread" width="260"> |
+
+The status chip on every screen is the product: `AUTO-5G` → `No Service` → `Gateway`, narrated live. The [dark map](https://skywatch-9kvd.onrender.com/app.html) carries the plume polygons, pins and mesh coverage; the [ops board](https://skywatch-9kvd.onrender.com/ops.html) carries the verification:
+
+<p align="center">
+  <img src="docs/screenshots/app-map.png" alt="Dark street map with mesh chips (34 mesh packets, 15 hazards), shelter pins and priority beacons" width="46%">
+  <img src="docs/screenshots/app-profile.png" alt="Profile screen: network mode chip 5G auto with Auto, Online, No Service and Gateway options" width="46%">
+</p>
+
+## 🎬 The demo
+
+The replay loads a **real disaster** — the September 11, 2020 West Coast smoke event (actual NOAA HMS archive, converted to a committed fixture), so the demo never depends on Wi-Fi or a live disaster. Seven beats:
+
+| # | Beat | What you see |
+|---|---|---|
+| 1 | The dead alert | Real Sept 11 2020 NWS air-quality alert: county-wide, English, no shelter. |
+| 2 | Two-text signup | The judge texts "hi", picks a neighborhood and a language; Skywatch goes quiet until it matters. |
+| 3 | Replay | The Replay button lands smoke-plume polygons over the live map. |
+| 4 | Verification | Teammate phones get check-in calls; shelter pins flip open/unknown LIVE with "verified 2 min ago" chips. |
+| 5 | The phone rings | A voice brief in the judge's language — timing, actions, the one verified shelter, the blocked road — then the follow-up text answers the judge's own question. |
+| 6 | THE MESH | Airplane mode on three phones → beacons queue → one bar of signal → automatic gateway sync → "responders have seen your beacon", brief in Spanish, ops dark-zone lights up. |
+| 7 | Space still answers | Satellite plume overlay descends into the dark phone's map; the call recap plays back in Grok's voice. |
+
+*(Full script and 8:00 AM recording checklist: [`docs/video-script.md`](docs/video-script.md).)*
+
+## 🛡️ How it stays trustworthy
+
+| Rule | Enforced how |
+|---|---|
+| **Never invent** | The renderer is fenced by a validator with per-language fallbacks — any place, number or road not in the locked brief is rejected, templates render instead. |
+| **Stale = unknown** | Every check-in carries a decaying confidence (shelters 30-min half-life, roads 15-min); under 50% the chip reads **unknown**. |
+| **Escape hatch** | No verified shelter near you? The brief says so honestly and points to 911 — never a guess. |
+| **Consent** | The first "hi" grants text + voice, on the record; `STOP` kills both. No reply after, ever. |
+| **Rate limits** | Max 5 ordered actions per brief; packet TTL 7 hops, 200-packet sync batches, ≤150 KB photos. |
+| **Audit** | An outbox row for *every* outbound; inbound webhooks are HMAC-signed and fail-closed (401 on a bad signature); `/map/state` + `/mesh/state` never emit a phone number or device id. |
+
+Enforced in code, not policy.
+
+## 🏆 Tracks
+
+**Title — Community Kitchen.** The equity story: one household, in its own language, with its own verified shelter — the thing a county alert can't do.
+
+**Photon.** Built on Photon 2.0 — iMessage + SMS signup/delivery over the real webhook state machine, and voice over SIP to ElevenLabs agents. Sends are recorded in the outbox state-accurately even when creds are absent (fail-visible, never fail-silent).
+
+**SpaceX — "Make it Legendary."** Built and shipped in **Cursor**; the **Grok Voice API** (xAI) synthesizes the post-call recap as playable audio in the household's language (`/tools/summary-audio`, cached, tl falls back to ElevenLabs by catalog). And when even the last bar dies, **satellite-derived data descends to phones with no bars**: with `SKYWATCH_LIVE_SYNC=1`, NOAA HMS plumes + NWS alerts + AQI are live-fetched at gateway sync and ride the downlink bundle to every dark phone.
+
+**SideShift.** *Who pays:* county emergency offices and municipalities — they already mass-mail evacuation pamphlets; this is per-household, verified-shelter outreach in six languages. *How it spreads:* every partner check-in makes a nonprofit a node on the map, and signups travel neighbor-to-neighbor over the same mesh that carries the disaster news.
+
+**MLH:**
+- 🟡 **Gemini API** — wording-only LLM inside a validator fence; `✓ live` with `GEMINI_API_KEY` + `REPLAY=0`, 🟡 degrades to pre-translated templates by design (never a dead beat).
+- 🟡 **MongoDB Atlas** — `✓ live` in production: geo-queries ($geoIntersects/$geoNear 2dsphere), user/brief records, mesh packet + photo storage driving every screenshot above.
+- 🟡 **Tiger Data** — check-ins mirror to Timescale `status_events`; the ops board's Status history panel reads it back with decayed confidence. Env-gated (`TIGER_DATABASE_URL`): with it, live history charts; without it, the panel says so — it never fakes data.
+
+*✓ = live on the deployed instance right now · 🟡 = on with its key/env (fail-safe behavior documented).*
+
+## 🏗️ Architecture
 
 ```
                  fixtures/ (REPLAY=1 demo path)         live fetch code exists,
@@ -38,91 +122,78 @@ Monorepo: `apps/api` (this backend, fully built), `apps/web` + `apps/vision` (pl
   └────────────────┬────────────────────────┘
                    v
             Photon (iMessage/SMS)  <──────────────── webhooks back in
+
+  [offline mesh] phones (WebRTC hotspot) -> POST /mesh/sync -> downlink bundle
+                 gateway uplink; satellite overlay rides sync when SKYWATCH_LIVE_SYNC=1
+
+  [check-ins] ┄┄ fire-and-forget mirror ┄┄> Tiger Data status_events (TIGER_DATABASE_URL)
 ```
 
-Two hard fences: **brief validator** (never name a place/number/road not in the brief) and **consent** (first "hi" grants text+voice, STOP kills both). `/map/state` + `/map/stream` never emit phone numbers (or anything else user-identifying).
+**Collections:** `hazards` · `resources` (verifiedAt) · `roads` · `users` · `conversations` · `outbox` · `verify_requests` · `mesh_packets` · `beacons` · `mesh_devices` · `tts_cache`
 
-## Env vars
+## 🗺️ Repo map
 
-Copy `.env.example` to `.env` (root, gitignored). Secrets never land in git and on Render they are set in the **dashboard**, never synced (`render.yaml` marks them `sync: false`).
+| Where | What |
+|---|---|
+| `main` | **The backend** (`apps/api`: ingest → match/build → render → deliver → verify) + the reference PWA (`apps/web`, served same-origin) + fixtures + docs. |
+| `main` → `apps/web` | The deployable phone app (this README's screenshots): brief, map, mesh, profile + `ops.html` operator board, `judge-sim.html`, `mesh-sim.html`. |
+| `client` branch | The shipping frontend (skywatch-client, Next.js) — same API, server-side proxy + signing. |
+| `main` → `apps/native` | Capacitor BLE scaffold for the native mesh transport (`native-ble.js` + `sync-web.mjs` seam; the browser hotspot gateway is the demo path). |
+| `main` → `apps/vision` | Vision teammate's surface (seam: `POST /roads/check`). |
 
-| Var | What it's for | Owner | Where it's set | Without it |
-| --- | --- | --- | --- | --- |
-| `MONGODB_URI` | The only DB (hazards/resources/roads/users/conversations/outbox/verify_requests + mesh: mesh_packets/beacons/mesh_devices) | backend | Render env (Atlas) | DB-backed routes return 503; boot itself still runs (lazy connect) |
-| `GEMINI_API_KEY` | Live LLM rendering of alerts | backend | Render env (Google AI Studio) | Fallback per-language pre-translated templates render the alert instead (also happens whenever `REPLAY=1` — the demo path uses templates, no Gemini call) |
-| `AIRNOW_API_KEY` | Live AQ obs by lat/long | backend | Render env (AirNow) | Ingest falls back to Open-Meteo air-quality host (no key); AQI fixture on the demo path |
-| `WSDOT_ACCESS_CODE` | Live WSDOT camera metadata / snapshots | backend | Render env (WSDOT) | Cameras only come from the committed fixture; roads/check verdicts still accepted |
-| `PERCEPTRON_API_KEY` | Marks the vision-service seam "wired" — the vision teammate's service POSTs verdicts to `/roads/check`; the API never makes live vision calls | vision | Render env | `/roads/check` accepts manual/teamed verdicts only; adapter reports `not_wired` |
-| `PHOTON_PROJECT_ID` | Photon project identity for outbound sends | delivery | Render env (Photon dashboard) | `toPhoton` throws `NotWiredError` BEFORE any network call; sends recorded as `not_wired` in outbox |
-| `PHOTON_PROJECT_SECRET` | Photon project secret (paired above) | delivery | Render env (Photon dashboard) | same `NOT_WIRED` sends behavior as the ID |
-| `PHOTON_WEBHOOK_SIGNING_SECRET` | HMAC over `v0:{timestamp}:{rawBody}` for inbound `/webhooks/photon/message` | delivery | Render env + Photon dashboard must hold the same value | **fail-closed: inbound webhooks are rejected 401** — signup/delivery dead |
-| `ELEVENLABS_API_KEY` | Delivery's agents use it to run; the backend itself never calls the API | delivery | Render env (ElevenLabs) | nothing breaks on the backend; agents can't run |
-| `ELEVENLABS_AGENT_ID_BRIEF` | Identifies which calls come FROM the Brief caller in the post-call webhook | delivery | Render env + the ElevenLabs dashboard (agent config pointing at `PUBLIC_BASE_URL/tools/brief/...`) | post-call calls can't be labeled as brief-caller |
-| `ELEVENLABS_AGENT_ID_CHECKIN` | Stamped onto `verify_requests`; post-call outcome routing matches on it | delivery | Render env + ElevenLabs dashboard (Check-in agent; consumes `GET /tools/checkin/next`) | check-in outcomes can't be routed back to the right request |
-| `ELEVENLABS_VOICE_WEBHOOK_SECRET` | `elevenlabs-signature` HMAC on `/webhooks/voice/post-call` | delivery | Render env + ElevenLabs webhook settings | **fail-closed: post-call webhooks rejected 401** — outcomes lost |
-| `PUBLIC_BASE_URL` | Canonical URL of the deployment for agents to point their tools at | backend | Render env (defaults `http://localhost:PORT`) | After the first Render deploy set it to the service's `onrender.com` URL and redeploy; agent dashboards should use it explicitly |
-| `REPLAY` | `1` = every feed reads committed fixtures + renders via fallback templates (the demo path); `0` = live feeds + live Gemini | backend | Render env, `1` for the demo | `REPLAY=1` is the only proven path; `0` hits live feeds |
-| `PORT` | HTTP listener port (Render injects its own) | backend | Render env | defaults 3000 |
-| `TOOL_SECRET` | Shared secret for `/tools/*`, `/verify/run`, `/roads/check` (`X-Skywatch-Tool-Secret:` or `Authorization: Bearer`) | backend | Render env; the same value goes to the ElevenLabs agent tool configs | unset = endpoints accept **unauthenticated writes** (demo-grade decision; a boot-log warning fires). Set before exposing. |
-| `TIGER_DATABASE_URL` | Optional mirror of check-ins into Tiger Data `status_events` (Timescale Postgres, `pg`); **Task 8h READ side**: `GET /tools/status-history?entity=<id>&hours=<6>` queries the mirror (per-row decayed confidence, same formula as the dashboard) — `503 {configured:false}` when unset, never faked from Mongo | backend (lead) | Render env | unset = **no Tiger writes at all + the history route reads 503 {configured:false}** (Mongo `verifiedAt` is the demo source of truth); set = fire-and-forget mirror + the operational chart reads it |
-| `SKYWATCH_LIVE_SYNC` | `1` = gateway sync live-fetches the satellite overlay (Task 8e) + upserts it into `hazards` | backend | Render env; default unset/`0` | unset = **no satellite section, no fetch** (tests hermetic + offline-deterministic); REPLAY never gates this |
-| `XAI_API_KEY` | Grok Voice TTS (xAI) key — `POST api.x.ai/v1/tts` (`voice_id=eve`) renders the post-call summary recap mp3, cached in `tts_cache` (sha256(text+lang)) and played via `GET /tools/summary-audio/:outboxId` (Task 8f, SpaceX track) | backend (lead) | Render env + console.x.ai | unset = **text-only path, zero TTS calls**; tl (Tagalog) is UNSUPPORTED by /v1/tts — those users keep the ElevenLabs/text path |
-| `DEMO_SIGNUP` | `1` = the phone-native demo onboarding routes are ON (`POST /demo/signup`, `POST /demo/area-brief` — Task 8g; server-side-signed envelopes over the EXACT real webhook/signup path) | backend (lead) | Render env, demo only | unset = **403 on both /demo routes** (boot warning when on); requires `PHOTON_WEBHOOK_SIGNING_SECRET` set to sign |
-| `GEMINI_LIVE_IN_REPLAY` | `1` = LIVE Gemini inside `REPLAY=1` for the alert render + beat-6 chat Q&A (Task 9, MLH Gemini track — fixtures move, wording can still be live) | backend (lead) | Render env, demo only | unset/`0` = **demo stays the deterministic fallback under REPLAY** (fail-safe unchanged); the validator→retry→per-lang fallback chain is identical either way — a live failure under replay = fallback, never a dead beat |
-
-## Offline mode (mesh, Task 8)
-
-Phones-only transport: dark phones relay over a Wi-Fi hotspot LAN (WebRTC — frontend page); the self-discovered **gateway** node POSTs the whole batch and rebroadcasts the returned downlink bundle.
-
-- `POST /mesh/sync` — `{deviceId, lat, lon, packets[]}` (max 200/packet batch). Each packet: `{id, type: beacon|hazard|ack|brief|msg, status, lat, lon, ts, hops, ttl: 7, photo?, deviceId, sig, pubkey?, legacy?}` (`msg`: status = the chat text, 1..280 chars verbatim, optional `to:` null = broadcast / deviceId hash = direct message; stored `mesh_packets`, never scored, never decayed — transport, not facts). Auth is the packets themselves: Ed25519 over `` `${id}|${type}|${ts}|${lat}|${lon}|${deviceId}` `` (each field passed through `String()`, sig + pubkey as base64 of the **raw** WebCrypto bytes); the pubkey is pinned on a device's first packet (`mesh_devices`, trust-on-first-use, demo-grade). Devices without Ed25519 send `legacy:true` — stored unverified, scored with an "unsigned device" reason, but never clustered and never acked. Packs with failed sigs are recorded unscored ("never dropped silently"). Dedup by packet id (idempotent gateway retries). Scoring is computed ONCE at sync with a reasons array; the 30-min decay composes at read time. Rescue beacons (`Trapped|Injured|Need Rescue`, any casing/emoji) are never decayed/downgraded and cluster per kind within 100 m.
-- The sync response is the **downlink bundle**: template-only brief text (never Gemini), verified-or-null shelter, blocked roads (max 2), `acks` ("responders have seen your beacon", + 911 line) for the gateway's contributed beacon clusters, and Task 8b `messages` — the newest 20 mesh chat messages addressed `to` the gateway's deviceId hash or broadcast within 5 km (user text verbatim; ack language now takes the device lang as an optional param, default `en`). All server-COMPOSED bundle strings stay template-derived.
-- `GET /mesh/state` — dark-zone dashboard layer (open-read, same posture as `/map/state`: never a phone number or raw deviceId; coverage dots are a sha256 deviceId hash prefix + ~1 km rounded point; msg packets add no coverage dots). Task 8b additions, additive to the Task 8 shape: `messages` — newest 50 mesh chat messages `{id, from: deviceIdHash, to, text, ts, hops}` (type `msg` only) — and `resources` — the dashboard's shelter/resource pins `{sourceId, kind, name, status, lat, lon}` with the same map-display status/open-confidence rule. It is also merged into `/map/state` as a `mesh` section only when packets exist — data-gated, never config-gated: **both mesh routes run identically in `REPLAY=0` and `REPLAY=1`** (explicit final-review decision).
-- **Ask Skywatch over the mesh (Task 8d)** — a msg packet with `to:"SKYWATCH"` (case-insensitive) routes at sync to the Task 6 chat loop; the answer is a NEW trusted-core msg packet (`deviceId:"SKYWATCH-CORE"`, `verify:"core"` — the server is the author, nothing to verify; never scored/clustered/decayed, and the id is reserved: gateways can't claim it) direct to the asker's hash, with the brief resolved at the **asker's** coordinates (a point-based brief — same builder/validator as /tools/brief). Gemini key + REPLAY=0 = live validated tool-loop answer (invented entities -> fallback); no key or REPLAY=1 = the deterministic brief-fields composition. Gateway claiming the core id is rejected.
-- **Mesh photos (Task 8e)** — a packet may carry `photoRef` (a POINTER only: photo bytes NEVER ride the batch); the gateway uploads the bytes with `POST /mesh/photo {deviceId, photoRef, data: base64, label?: road-broken|fire|safe-place|flood|other}` (≤150 KB, jpeg/png; 413/400 with a reason list). AUTH = the packet TOFU scheme, keep-simple: the deviceId must be a PINNED (signed) device — legacy/unsigned devices cannot upload. Reads: `GET /mesh/photo/:photoRef` (bytes, immutable cache) + `GET /mesh/photos` (gallery index: ref/kind/size/ts/deviceId-HASH).
-- **Satellite overlay (Task 8e)** — with `SKYWATCH_LIVE_SYNC=1` (default `0`; REPLAY does not gate this), every `/mesh/sync` for the gateway's area (±0.5°) live-fetches NOAA HMS plumes (the ingest/smoke.ts ArcGIS query), NWS active alerts (by point) and Open-Meteo AQI, ALL-OR-NOTHING (5 s timeout per source; any failure = the whole `satellite` section is omitted from the bundle). The normalized docs ride the SAME ingest normalizers and are upserted into `hazards` — dashboards and future briefs gain them too. No knob → no section, no fetch.
-- **Photo demo flow** — dark phone shoots a broken road → the report (with `photoRef`) rides the mesh relay → the gateway catches signal and ships the batch → the gateway's browser then `POST /mesh/photo` with the cached bytes → `hasPhoto/photoKind/photoUrl` light up on `/mesh/state` + `/map/state`'s mesh panels and `GET /mesh/photos` shows the gallery. (Vision scoring stays a stub — label text only.)
-- **Grok Voice summary audio (Task 8f, SpaceX track)** — when `XAI_API_KEY` is set, the post-call summary is ALSO rendered to mp3 by xAI's `/v1/tts` (`voice_id=eve`, exact language codes `es-MX`/`ar-SA`/`zh`/`vi`; **tl unsupported** → text-only), cached in `tts_cache` (sha256(text+lang), cache-read before network) and stamped onto the summary's outbox meta; the dashboard plays it via `GET /tools/summary-audio/:outboxId` (TOOL_SECRET-gated like all /tools reads). 5 s timeout, any failure ⇒ **no audio, deliver never blocks**; without the key the feature is absent and the text path is byte-identical to before.
-- **Phone-native demo onboarding (Task 8g)** — `DEMO_SIGNUP=1` (demo only; boot warning fires) enables `POST /demo/signup` `{phone (E.164), platform, texts[]}`: the backend builds the FULL Stable Spectrum envelope per text, signs it with `PHOTON_WEBHOOK_SIGNING_SECRET` (the secret the phone app can never hold) and drives the EXACT real webhook → verify → queue → signup-state-machine path, then returns `{ok, userId, state, lang, brief, mapLink}` — the phone number is never echoed or logged. `POST /demo/area-brief` `{lat, lon}` returns the area brief (same builder/validator semantics as the per-user pipeline; unvalidated shelter = null) for the phone's no-signup Home fallback.
-
-## Run
+## ⚡ Quickstart
 
 ```bash
 npm ci
 npm test                      # hermetic suite (no Mongo needed)
+cp .env.example .env          # set what you have (see table below)
 REPLAY=1 MONGODB_URI=mongodb://localhost:27017/skywatch-dev npm run dev   # tsx watch
-npm run start -w @skywatch/api                            # prod start path (node --import tsx)
-npm run build --workspaces                                # deploy build step (tsc typecheck-as-build)
-npx tsx apps/api/scripts/smoke.ts             # end-to-end smoke (needs the app running + MONGODB_URI)
+npm run build --workspaces    # deploy build (tsc typecheck-as-build)
+npx tsx apps/api/scripts/smoke.ts    # end-to-end smoke against a running app
 ```
 
-Deploy target is Render (free web service): branch `main` with `render.yaml`
+Deploy target is Render (`render.yaml`, Node 20, health `/health`, `REPLAY=1` pinned; secrets set in the dashboard, `sync: false`).
 
-```yaml
-runtime: node (NODE_VERSION 20), node 20 plan free, healthCheckPath /health
-build: `npm ci && npm run build --workspaces`, start: `npm run start -w @skywatch/api`
-REPLAY=1 pinned in render.yaml; every secret var is `sync: false` (set in the dashboard)
-```
+<details>
+<summary><strong>⚙️ Environment variables (full table)</strong></summary>
 
-## Verify before demo
+| Var | What it's for | Without it |
+| --- | --- | --- |
+| `MONGODB_URI` | The only DB (hazards/resources/roads/users/conversations/outbox/verify_requests + mesh_packets/beacons/mesh_devices) | DB-backed routes return 503; boot still runs (lazy connect) |
+| `GEMINI_API_KEY` | Live LLM rendering of alerts | Per-language pre-translated templates render instead (also always under `REPLAY=1`) |
+| `AIRNOW_API_KEY` | Live AQ obs by lat/long | Ingest falls back to Open-Meteo (no key); AQI fixture on the demo path |
+| `WSDOT_ACCESS_CODE` | Live WSDOT camera metadata / snapshots | Cameras come from the committed fixture; roads/check verdicts still accepted |
+| `PERCEPTRON_API_KEY` | Marks the vision-service seam "wired" (vision POSTs verdicts to `/roads/check`) | `/roads/check` accepts manual/teamed verdicts only |
+| `PHOTON_PROJECT_ID` / `PHOTON_PROJECT_SECRET` | Outbound sends (iMessage/SMS) | Sends throw `NotWiredError` before any network call; recorded `not_wired` in outbox |
+| `PHOTON_WEBHOOK_SIGNING_SECRET` | HMAC on inbound `/webhooks/photon/message` | Fail-closed: inbound webhooks 401 — signup/delivery dead |
+| `ELEVENLABS_API_KEY` / `_AGENT_ID_BRIEF` / `_AGENT_ID_CHECKIN` | Delivery's voice agents run on it | Nothing breaks on the backend; agents can't run |
+| `ELEVENLABS_VOICE_WEBHOOK_SECRET` | HMAC on `/webhooks/voice/post-call` | Fail-closed: post-call webhooks 401 — outcomes lost |
+| `PUBLIC_BASE_URL` | Canonical deployment URL for agent tool configs | Defaults `http://localhost:PORT` |
+| `REPLAY` | `1` = feeds read committed fixtures + renders via templates (the demo path) | `0` = live feeds + live Gemini |
+| `TOOL_SECRET` | Shared secret for `/tools/*`, `/verify/run`, `/roads/check` | Endpoints accept unauthenticated writes (demo-grade; boot-log warning) |
+| `TIGER_DATABASE_URL` | Check-in mirror into Tiger Data `status_events` + `GET /tools/status-history` | No Tiger writes; history route returns `503 {configured:false}` — never faked |
+| `SKYWATCH_LIVE_SYNC` | `1` = gateway sync live-fetches the satellite overlay into `hazards` | No satellite section, no fetch |
+| `XAI_API_KEY` | Grok Voice TTS (`voice_id=eve`) renders post-call recap mp3 (`tts_cache`, `tl` unsupported → text-only) | Text-only path, zero TTS calls |
+| `DEMO_SIGNUP` | `1` = phone-native demo onboarding routes (`POST /demo/signup`, `/demo/area-brief`) | 403 on both routes |
+| `GEMINI_LIVE_IN_REPLAY` | `1` = live Gemini inside `REPLAY=1` for render + beat-6 chat Q&A | Demo stays deterministic-fallback under replay — a live failure means fallback, never a dead beat |
+| `PORT` | HTTP listener (Render injects its own) | 3000 |
 
-1. `GET /health` returns `{"ok":true}`.
-2. Run the end-to-end smoke against the running app: `MONGODB_URI=... npx tsx apps/api/scripts/smoke.ts` — all steps PASS, exit 0. It exercises `/health` → `POST /scenario/smoke/replay` → `/map/state` (hazards>0, resources>0) → seeds a throwaway consented user inside a replayed smoke polygon, fetches `GET /tools/brief/:id` and asserts the locked brief shape (it never sends anything through Photon).
-3. `TOOL_SECRET` is set AND the smoke is run with the same `TOOL_SECRET` env (unset = unauthenticated tool writes; set = brief routes must carry `X-Skywatch-Tool-Secret`).
-4. `PHOTON_WEBHOOK_SIGNING_SECRET` set on both sides (Render + Photon) — an inbound test webhook must not 401.
-5. ElevenLabs: the Brief agent's dynamic-variables tool points at `PUBLIC_BASE_URL/tools/brief/:userId`; the Check-in agent consumes `GET /tools/checkin/next?deviceId=` and both agent IDs are set in Render env (`ELEVENLABS_AGENT_ID_BRIEF` / `_CHECKIN`).
-6. `ELEVENLABS_VOICE_WEBHOOK_SECRET` set on both sides - post-call outcomes must land in conversations.
-7. `REPLAY=1` on the API service; a `POST /scenario/smoke/replay` just before the demo refreshes the fixture snapshot.
-8. GEMINI deliberately NOT exercised here — `REPLAY=1` yields fallback templates by design (set `REPLAY=0` + `GEMINI_API_KEY` only when the live render path is wanted).
-9. Render free tier sleeps after ~15 min idle (~50 s cold start): keep the dashboard tab open for keep-alive, or resume the service from the dashboard about a minute before the demo.
-10. `TIGER_DATABASE_URL` either unset (no-op, no demo impact) or set with its table reachable; check-ins must never wait on it (fire-and-forget is verified by design).
+Set in the **dashboard**, never in the repo: `render.yaml` marks every secret `sync: false`.
+</details>
 
-Note on `TOOL_SECRET`: when it is unset, the tool endpoints (`/tools/*`, `/verify/run`, `/roads/check`) accept **unauthenticated writes** — that is a demo-grade decision, the boot log warns about it, and it must be set before the API is exposed.
-### Verifying with real Mongo
-Gated tests use the MONGODB_URI (throwaway DB). Two rules:
-- Run `npx vitest run --no-file-parallelism` — the gated files share one DB by design and must not interleave.
-- If the network breaks TLS 1.3 (campus VPNs/proxies: 'tlsv1 alert internal error' or ENOTFOUND on the mongodb+srv seed), use the non-SRV string + `NODE_OPTIONS=--tls-max-v1.2` (both are in root `.env` locally; on Render the plain `mongodb+srv` string works).
+## 🖥️ The operator board
 
-### Repo layout
-- `main` = backend (apps/api + fixtures + docs) and the reference demo app + harness (apps/web).
-- **`client` branch = the shipping frontend** (skywatch-client, Next.js 16 + React 19: landing / alert / offline-mesh / ops) — same API, server-side proxy + signing.
-Both branches: public, live, real-backend everywhere.
+The judge never sees the plumbing — but it's there: live MapState, manual verify (check-in), verify-run queue, scenario replay, dark-zone layer, and the Tiger Data status-history panel.
+
+<p align="center">
+  <img src="docs/screenshots/ops-board.png" alt="Skywatch operator board: active hazard list, resources with open/unknown statuses, status history panel, manual verify buttons and scenario replay" width="100%">
+</p>
+
+---
+
+## Team + credits
+
+**Skywatch** — DubHacks '26. Built by the Skywatch team (backend + PWA lead: [@atharv109](https://github.com/atharv109)).
+
+Data: [NWS api.weather.gov](https://api.weather.gov) · [NOAA HMS Smoke Mapping](https://www.ospo.noaa.gov/Products/land/hms.html) · [USGS Water Services](https://waterdata.usgs.gov) · [WSDOT Traffic API](https://wsdot.com/travel/real-time/map) · [AirNow](https://www.airnow.gov) · [Open-Meteo](https://open-meteo.com) · [FEMA National Shelter System](https://apps.fema.gov) · [US Census Geocoder](https://geocoding.geo.census.gov).
+Sponsors: **Photon** · **ElevenLabs** · **Google Gemini** · **MongoDB Atlas** · **Tiger Data** · **xAI (Grok Voice)** · **Cursor** · **GoDaddy Registry**.
