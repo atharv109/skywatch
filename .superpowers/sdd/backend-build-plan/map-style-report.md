@@ -39,6 +39,10 @@ Known gap (api-side): the map link the backend composes is `PUBLIC_BASE_URL + "/
 
 Step 0 of onboarding now carries an **"Already signed up over SMS?"** card: phone input (+ E.164, tolerates a country-code-less 10-digit entry) + Continue → `POST /demo/brief {phone}` (Task 8h contract) → on success the profile becomes `{phone, platform:"sms", lang, userId, onboarded}` (+ cfg.userId), the brief from the live record renders straight to Home with the toast "Resuming your real signup — brief from Skywatch's live record."; 404 → "That phone isn't signed up yet — do the quick signup below" (normal flow continues); 403 (gate off) / no-signal → honest inline messages; button shows "Checking…" while in flight. Step-0 stuck-feel: Continue now reads "Say hi and continue", every step re-renders with a `.ob-step` entrance animation and scrolls the onboarding sheet to top. Verified headless (mocked contract-shape responses): 404 / success→Home-with-brief / 403 / label+scroll-reset all asserted; SW `sw-v6`; pushed `931b07f`.
 
+## Follow-up 5 — resume phone normalization (pushed)
+
+Finding #5: a valid account's number ("4258329409") posted raw and got a false 404. The resume card now normalizes to E.164 BEFORE any POST (digits-only extraction handles ASCII + Unicode dashes/parens/spaces): 10 digits → `+1` + digits; 11 leading-1 → `+1` + last 10; leading `+` → kept; anything else → friendly inline error with no POST. "4258329409" → `+14258329409` (the controller-verified case). The resume Continue button is the orange primary (was `btn-ok` green). 404 copy unchanged for genuinely-unknown numbers. Headless smoke asserts all six input shapes POST exactly `+14258329409` and resume to Home, plus the invalid-input no-POST guard; SW `sw-v7`; pushed `e38b6dd`.
+
 ## What shipped (original build)
 
 ### 1. Offline tile pack (committed, no network at demo time)
