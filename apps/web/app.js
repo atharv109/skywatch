@@ -193,7 +193,7 @@
           const j = result.json;
           state.profile = Object.assign({}, state.profile, { phone: raw, platform: "sms", lang: j.lang || state.profile.lang, userId: j.userId, onboarded: true });
           persist.profile();
-          if (j.userId) { state.cfg.userId = j.userId; lsSet(LS.cfg, state.cfg); }
+          if (j.userId) { state.cfg.userId = j.userId; if (j.briefToken) state.cfg.briefToken = j.briefToken; lsSet(LS.cfg, state.cfg); }
           if (j.brief) { state.brief = j.brief; state.briefNote = null; cacheData("brief", j.brief); }
           state.flags.pendingDemoSignup = null; persist.flags();
           obEl.hidden = true; state.ob = null;
@@ -559,7 +559,21 @@
     const uid = state.cfg.userId ? "?user=" + encodeURIComponent(state.cfg.userId) : "";
     const phone = state.profile.phone;
     const result = await guarding(async () => {
-      return apiFetch(`/tools/brief/byPhone/${state.profile.platform}/${phone}${uid}`, { timeoutMs: 8000 });
+      // signed share token first (ungated); byPhone needs TOOL_SECRET once it is set server-side
+      if (state.cfg.briefToken) {
+        const t = await apiFetch(`/b/${encodeURIComponent(state.cfg.briefToken)}/data`, { timeoutMs: 8000 });
+        if (t && t.ok) return t;
+      }
+      const r = await apiFetch(`/tools/brief/byPhone/${state.profile.platform}/${phone}${uid}`, { timeoutMs: 8000 });
+      if (r && r.status === 401 && phone) {
+        // self-heal an older signup that never stored a token: re-resolve it by phone
+        const d = await apiFetch("/demo/brief", { method: "POST", body: { phone, platform: state.profile.platform }, timeoutMs: 8000 });
+        if (d && d.ok && d.json && d.json.briefToken) {
+          state.cfg.briefToken = d.json.briefToken; lsSet(LS.cfg, state.cfg);
+          return Object.assign({}, d, { json: d.json.brief });
+        }
+      }
+      return r;
     }, "brief");
     state.loading.brief = false;
     if (!result) return;
@@ -642,7 +656,7 @@
     state.flags.pendingDemoSignup = null;
     if (result.ok && result.json) {
       const j = result.json;
-      if (j.userId) { state.cfg.userId = j.userId; lsSet(LS.cfg, state.cfg); } // later byPhone reads
+      if (j.userId) { state.cfg.userId = j.userId; if (j.briefToken) state.cfg.briefToken = j.briefToken; lsSet(LS.cfg, state.cfg); } // later brief reads
       if (j.lang && !state.profile.lang) { state.profile.lang = j.lang; persist.profile(); }
       if (j.brief) { state.brief = j.brief; state.briefNote = null; cacheData("brief", j.brief); }
       state.flags.demoSignupOff = false; persist.flags();
@@ -2640,7 +2654,9 @@
    * MESH tab rendering — three surfaces: NEIGHBORS / DIRECTS / SKYWATCH
    * =======================================================================*/
 
-  const CORE_RE = /skywatch/i;
+  /* The server hashes every sender id (sha256 first 10 hex), the trusted core included:
+   * 1b20876ad5 = hash("SKYWATCH-CORE"). Ask Skywatch replies arrive under that hash. */
+  const CORE_RE = /skywatch|^1b20876ad5$/i;
 
   function fmtFetchedAt(v) {
     const d = v == null ? null : new Date(typeof v === "number" ? v : String(v));

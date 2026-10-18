@@ -102,6 +102,7 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
         state: user.state,
         lang: user.lang,
         brief,
+        briefToken: briefToken(config, user.id),
         mapLink: `${config.publicBaseUrl}/b/${briefToken(config, user.id)}`,
       });
     } catch (err) {
@@ -162,7 +163,7 @@ export function demoRoutes(config: Config, deps: AppDeps): Hono {
         return c.json({ error: "no Skywatch account for this phone (text the Skywatch number from that phone first; signup is SMS-verified)" }, 404);
       }
       const brief = user.loc ? await buildUserBrief(await deps.match(), { id: user.id, lang: user.lang, loc: user.loc }, Date.now()) : null;
-      return c.json({ ok: true, userId: user.id, state: user.state, lang: user.lang, brief });
+      return c.json({ ok: true, userId: user.id, state: user.state, lang: user.lang, brief, briefToken: briefToken(config, user.id) });
     } catch (err) {
       console.error("demo/brief failed:", err instanceof Error ? err.message : err);
       return c.json({ error: "demo brief unavailable (backend store is down)" }, 503);
