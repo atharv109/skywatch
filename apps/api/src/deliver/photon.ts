@@ -122,23 +122,60 @@ interface SpectrumApp {
 }
 type AnyRecord = Record<string, any>;
 
-let sdkCache: AnyRecord | "unavailable" | null = null;
+/**
+ * The REAL spectrum-ts surface (verified live 2026-10-18 against the installed
+ * package, node 24): the metapackage's MAIN export carries `Spectrum` etc. but NOT
+ * the `imessage` provider — that lives on the SUBPATH "spectrum-ts/providers/imessage"
+ * (with the `.config()` builder + a platform-instance selector called ON the Spectrum
+ * app: `im = imessage(app)`). Send path (the contract from
+ * skywatch-notes/photon-interface.md, verified in the typings):
+ *
+ *     const app = await Spectrum({ projectId, projectSecret, providers: [imessage.config()] });
+ *     const im = imessage(app);
+ *     const user = await im.user(senderId);            // (for space.create)
+ *     const space = await im.space.get(spaceId);        // resolve by persisted id
+ *     await space.send(text);                           // ContentInput overload
+ */
+export interface SpectrumSdk {
+  Spectrum: (input: AnyRecord) => Promise<SpectrumApp>;
+  /** The iMessage provider: config() builder + (app) → PlatformInstance selector (call signature per the real platform type). */
+  imessage: {
+    config(): AnyRecord;
+    (app: SpectrumApp): AnyRecord;
+    [key: string]: any;
+  };
+}
 
 /**
- * Dynamic (non-literal) specifier: the SDK is not a dependency yet (Delivery owns
- * the real install + cred handoff), so this never resolves today — static
- * resolution would break typecheck. Returns null when it can not be loaded.
+ * The shape check against reality: exactly what toPhoton needs. A mismatch is a
+ * REAL integration bug (not "not wired") — it must surface as "failed" in the
+ * outbox, never as the not_wired "credentials missing" story.
  */
-async function loadSpectrumSdk(): Promise<AnyRecord | null> {
+export function spectrumShapeOk(mod: { Spectrum?: unknown; imessage?: unknown } | null): mod is SpectrumSdk {
+  return (
+    typeof mod?.Spectrum === "function" &&
+    typeof mod.imessage === "function" &&
+    typeof (mod.imessage as { config?: unknown }).config === "function"
+  );
+}
+
+let sdkCache: SpectrumSdk | "unavailable" | null = null;
+
+/**
+ * Load the REAL SDK (main export + the providers/imessage subpath) and shape-check.
+ * Any failure → null; toPhoton re-labels that as SpectrumLoadError ("failed") when
+ * creds ARE set — the SDK is installed, so a load failure is a bug, not missing wiring.
+ */
+export async function loadSpectrumSdk(): Promise<SpectrumSdk | null> {
   if (sdkCache === "unavailable") return null;
+  if (sdkCache) return sdkCache;
   try {
-    const spec = "spectrum-ts";
-    const mod: AnyRecord = await import(spec);
-    if (typeof mod?.Spectrum !== "function" || typeof mod?.imessage !== "function") {
-      throw new Error("unexpected spectrum-ts export shape");
-    }
-    sdkCache = mod;
-    return mod;
+    const core = (await import("spectrum-ts")) as AnyRecord;
+    const imessageProvider = (await import("spectrum-ts/providers/imessage")) as AnyRecord;
+    const candidate = { Spectrum: core["Spectrum"], imessage: imessageProvider["imessage"] };
+    if (!spectrumShapeOk(candidate)) throw new Error("unexpected spectrum-ts export shape");
+    sdkCache = candidate;
+    return sdkCache;
   } catch {
     sdkCache = "unavailable";
     return null;
@@ -148,31 +185,40 @@ async function loadSpectrumSdk(): Promise<AnyRecord | null> {
 export type PhotonOutboundCredentials = Pick<Config, "photonProjectId" | "photonProjectSecret">;
 
 /**
- * Send text into a Photon space. Documented stable-SDK send path per
- * photon-interface.md ("Outbound send (text)"): rebuild the space by id, then
- * space.send(text) — `im.space.get("any;-;+15551111111").send(...)` is the
- * spaces-and-users pattern for known ids.
+ * Thrown when the SDK is installed (creds set) but cannot LOAD (missing package
+ * pieces/shape mismatch): a real integration bug — send.ts records it as "failed"
+ * so the outbox shows it, INSTEAD of the not_wired "creds unset" row.
+ */
+export class SpectrumLoadError extends Error {}
+
+/**
+ * Send text into a Photon space (photon-interface.md), on the verified REAL API:
+ * Spectrum() cloud auth (projectId + projectSecret) → the imessage platform
+ * instance → space.get(spaceId) (the persisted id, e.g. "any;-;+1555…") →
+ * space.send(text).
  *
- * NOT_WIRED boundaries (task brief): unset creds → NotWiredError BEFORE any
- * network call; SDK not installed / unexpected export shape → NotWiredError.
- * Runtime SDK errors after load are NOT NotWiredError — callers write the outbox
- * row with status "failed" instead, so a live credential/shape divergence is
- * visible in the outbox rather than silently swallowed.
+ * NOT_WIRED boundaries: unset creds → NotWiredError BEFORE any network call
+ * (the only not_wired case). SDK load/shape failure WITH creds set →
+ * SpectrumLoadError → the outbox row says "failed" (visible integration bug).
+ * Runtime SDK errors after load (e.g. SpectrumCloudError) are NOT NotWiredError —
+ * callers write "failed".
  */
 export async function toPhoton(
   spaceId: string,
   text: string,
   credentials: PhotonOutboundCredentials,
+  /** Test seam: defaults to the real loadSpectrumSdk (memoized). */
+  loader: () => Promise<SpectrumSdk | null> = loadSpectrumSdk,
 ): Promise<void> {
   if (!credentials.photonProjectId || !credentials.photonProjectSecret) {
     throw new NotWiredError(
       "not wired: PHOTON_PROJECT_ID / PHOTON_PROJECT_SECRET are unset — this outbound was recorded in the outbox as not_wired, nothing sent",
     );
   }
-  const sdk = await loadSpectrumSdk();
+  const sdk = await loader();
   if (!sdk) {
-    throw new NotWiredError(
-      "not wired: spectrum-ts SDK unavailable (package not installed) — this outbound was recorded in the outbox as not_wired, nothing sent",
+    throw new SpectrumLoadError(
+      "spectrum-ts SDK failed to load or shape mismatched (package installed; check node_modules/spectrum-ts) — this outbound was recorded in the outbox as failed, nothing sent",
     );
   }
   const app: SpectrumApp = await sdk["Spectrum"]({

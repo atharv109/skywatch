@@ -15,6 +15,9 @@ import {
   verifyPhotonSignature,
   toPhoton,
   NotWiredError,
+  SpectrumLoadError,
+  spectrumShapeOk,
+  type SpectrumSdk,
   type PhotonPayload,
 } from "../src/deliver/photon.ts";
 import { readFixture } from "../src/ingest/fixtureio.ts";
@@ -378,14 +381,52 @@ describe("webhook envelope handling (default branches)", () => {
   });
 });
 
-describe("NOT_WIRED toPhoton", () => {
+describe("NOT_WIRED toPhoton + the REAL spectrum-ts adapter (8-urgent fix)", () => {
   it("unset creds → NotWiredError mentioning the outbox; nothing thrown through the pipeline", async () => {
     await expect(toPhoton("any;-;+15551239999", "hello", { photonProjectId: null, photonProjectSecret: null })).rejects.toBeInstanceOf(
       NotWiredError,
     );
+    // With creds SET a load failure is an integration BUG, relabeled: "failed", not not_wired (Task 8-urgent ruling).
     await expect(
-      toPhoton("any;-;+15551239999", "hello", { photonProjectId: "proj", photonProjectSecret: "sec" }),
-    ).rejects.toMatchObject({ message: expect.stringMatching(/not wired/) });
+      toPhoton("any;-;+15551239999", "hello", { photonProjectId: "proj", photonProjectSecret: "sec" }, async () => null),
+    ).rejects.toBeInstanceOf(SpectrumLoadError);
+  });
+
+  it("the INSTALLED spectrum-ts matches the verified export shape (main Spectrum + providers/imessage subpath) — no network", async () => {
+    const core = await import("spectrum-ts");
+    const provider = await import("spectrum-ts/providers/imessage");
+    expect(spectrumShapeOk({ Spectrum: core["Spectrum"], imessage: provider["imessage"] })).toBe(true);
+  });
+
+  it("a working fake SDK end-to-end (no network): Spectrum auth → im(app) → space.get(id) → space.send(text)", async () => {
+    const calls: string[] = [];
+    const fake: SpectrumSdk = {
+      Spectrum: async (input: Record<string, unknown>) => {
+        calls.push(`spectrum:${JSON.stringify(input)}`);
+        return { stop: () => undefined };
+      },
+      imessage: Object.assign(
+        (appArg: unknown) => ({
+          space: {
+            get: async (id: string) => {
+              calls.push(`get:${id}:${String(appArg === undefined ? "null" : "app")}`);
+              return { send: async (text: string) => calls.push(`send:${text}`) };
+            },
+          },
+        }),
+        { config: () => "imessage-config" as unknown as Record<string, unknown> },
+      ),
+    };
+    await toPhoton("any;-;+15551110000", "probe text", { photonProjectId: "p-id", photonProjectSecret: "s-sec" }, async () => fake);
+    expect(calls[0]).toBe('spectrum:{"projectId":"p-id","projectSecret":"s-sec","providers":["imessage-config"]}');
+    expect(calls[1]).toBe("get:any;-;+15551110000:app");
+    expect(calls[2]).toBe("send:probe text");
+  });
+
+  it("shape check: a garbage export reads as unavailable (false) — the loader seam is the test, loadSpectrumSdk null → SpectrumLoadError", () => {
+    expect(spectrumShapeOk({ Spectrum: 42, imessage: 42 })).toBe(false);
+    expect(spectrumShapeOk({ Spectrum: 42, imessage: { config: () => 1 } })).toBe(false);
+    expect(spectrumShapeOk(null)).toBe(false);
   });
 });
 
